@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ImageBackground,
   Pressable,
@@ -19,12 +19,15 @@ import {
   Screen,
   VehicleCard,
 } from "@/components/camotes/ui";
-import { beach, vehicles } from "@/data/mock";
-import { useDemo } from "@/state/demo";
+import { beach, mapVehicle, type Row as DataRow } from "@/data/models";
+import { ResourceState } from "@/components/camotes/api-ui";
+import { photoUrl } from "@/lib/api";
+import { useResource } from "@/hooks/use-resource";
+import { useApp } from "@/state/app";
 export default function Explore() {
   const { width } = useWindowDimensions();
   const desktop = width > 1150;
-  const { name } = useDemo();
+  const { name } = useApp();
   const [category, setCategory] = useState("All vehicles");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(false);
@@ -32,6 +35,37 @@ export default function Explore() {
   const [budget, setBudget] = useState("Any price");
   const [transmission, setTransmission] = useState("Any");
   const [seats, setSeats] = useState("Any seats");
+  const [debounced, setDebounced] = useState(search);
+  const [page, setPage] = useState({ filter: "", offset: 0 });
+  const filter = JSON.stringify([
+    debounced,
+    category,
+    area,
+    budget,
+    transmission,
+    seats,
+  ]);
+  const offset = page.filter === filter ? page.offset : 0;
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(search), 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const query = new URLSearchParams({ limit: "25", offset: String(offset) });
+  const categoryType: Record<string, string> = {
+    Cars: "car",
+    SUVs: "suv",
+    Motorcycles: "motorcycle",
+    Vans: "van",
+  };
+  if (debounced) query.set("search", debounced);
+  if (categoryType[category]) query.set("type", categoryType[category]);
+  if (area !== "Anywhere") query.set("town", area);
+  if (budget !== "Any price") query.set("max_price", "150000");
+  if (transmission !== "Any")
+    query.set("transmission", transmission.toLowerCase());
+  if (seats !== "Any seats") query.set("min_seats", "7");
+  const catalog = useResource<DataRow[]>(`/vehicles?${query.toString()}`);
+  const vehicles = (catalog.data || []).map((v) => mapVehicle(v, photoUrl));
   const results = vehicles.filter(
     (v) =>
       (category === "All vehicles" || category === v.category) &&
@@ -87,7 +121,7 @@ export default function Explore() {
               <Text className="text-[#F2C492] text-xs">★★★★★</Text>
             </View>
             <Text className="text-white/90 text-[11px]">
-              Trusted by 200+ island explorers
+              Connect with verified local owners
             </Text>
           </View>
         </View>
@@ -115,11 +149,13 @@ export default function Explore() {
               YOUR DATES
             </Text>
             <Pressable
-              onPress={() => router.push("/availability")}
+              onPress={() => setFilters(true)}
               className="flex-row items-center gap-2 py-2"
             >
               <Icon name="calendar" size={18} />
-              <Text className="text-sm text-ink">Oct 22 — Oct 24, 2026</Text>
+              <Text className="text-sm text-ink">
+                Choose dates when reserving
+              </Text>
             </Pressable>
           </View>
           <View className="flex-1">
@@ -226,6 +262,7 @@ export default function Explore() {
               />
             </Card>
           )}
+          <ResourceState {...catalog} retry={catalog.refresh} />
           <Text className="text-[11px] text-muted mb-4">
             {results.length} rides ready for your next adventure
           </Text>
@@ -239,7 +276,25 @@ export default function Explore() {
               </View>
             ))}
           </View>
-          {results.length === 0 && (
+          <View className="mt-5">
+            <View className="flex-row gap-3">
+              <Button
+                secondary
+                title="Previous rides"
+                disabled={!offset}
+                onPress={() =>
+                  setPage({ filter, offset: Math.max(0, offset - 25) })
+                }
+              />
+              <Button
+                secondary
+                title="More rides"
+                disabled={!catalog.data || catalog.data.length < 25}
+                onPress={() => setPage({ filter, offset: offset + 25 })}
+              />
+            </View>
+          </View>
+          {!catalog.loading && !catalog.error && results.length === 0 && (
             <Card>
               <Text className="text-ink font-semibold">No rides found</Text>
               <Text className="text-muted text-sm mt-2">

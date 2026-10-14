@@ -1,0 +1,6 @@
+project_id = "camotesdrive"
+
+[functions.camotes-api]
+# Public catalog routes and new signing keys are handled explicitly in index.ts.
+# Every protected route validates the bearer token with Auth getUser().
+verify_jwt = false

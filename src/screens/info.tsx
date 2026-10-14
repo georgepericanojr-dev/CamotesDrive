@@ -3,14 +3,14 @@ import { Text } from "react-native";
 import {
   Card,
   Heading,
-  Row,
+  Row as DetailRow,
   Screen,
   Field,
-  Button,
 } from "@/components/camotes/ui";
-import { useDemo } from "@/state/demo";
+import { useApp } from "@/state/app";
+import { AsyncButton, SignInRequired } from "@/components/camotes/api-ui";
 export function Support() {
-  const { toast } = useDemo();
+  const { toast, mutate, signedIn } = useApp();
   const [message, setMessage] = useState("");
   return (
     <Screen
@@ -18,23 +18,24 @@ export function Support() {
       subtitle="Your island support corner."
       back
     >
+      <SignInRequired />
       <Card>
         <Heading title="Frequently asked questions" />
-        <Row title="How do payments work?" />
+        <DetailRow title="How do payments work?" />
         <Text className="text-xs text-muted leading-5 my-3">
           Pay your owner by cash, GCash, Maya, or bank transfer. Submit your
           payment reference from your trip. The owner or admin verifies receipt.
         </Text>
-        <Row title="When can I cancel?" />
+        <DetailRow title="When can I cancel?" />
         <Text className="text-xs text-muted leading-5 my-3">
           Free cancellation until 48 hours before pickup. Later cancellations
           follow the policy shown before booking.
         </Text>
-        <Row title="Can I hire a driver?" />
+        <DetailRow title="Can I hire a driver?" />
         <Text className="text-xs text-muted leading-5 my-3">
           Chauffeured rentals become available only after platform TNC
           accreditation and vehicle / professional driver approvals. This
-          prototype defaults to self-drive.
+          service is available only when the platform accreditation is active.
         </Text>
       </Card>
       <Card>
@@ -45,13 +46,15 @@ export function Support() {
           onChangeText={setMessage}
           multiline
         />
-        <Button
-          title="Submit demo support request"
-          disabled={!message.trim()}
-          onPress={() => {
-            toast(
-              "Your demo request was recorded locally. No support message was sent.",
-            );
+        <AsyncButton
+          title="Submit support request"
+          disabled={!message.trim() || !signedIn}
+          onPress={async () => {
+            await mutate("/reports", {
+              category: "other",
+              description: message,
+            });
+            toast("Support request submitted.");
             setMessage("");
           }}
         />
@@ -77,7 +80,7 @@ export function Legal() {
         ],
         [
           "Privacy & document consent",
-          "Identity and license documents are collected only for verification and eligibility. In production they must be private and accessible only to authorized reviewers and the document owner. This demo uploads no documents and calls no backend.",
+          "Identity and license documents are collected for verification and eligibility, stored privately, and accessible only to authorized reviewers and the document owner.",
         ],
         [
           "Account deletion & retention",

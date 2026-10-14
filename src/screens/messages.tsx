@@ -1,173 +1,202 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { randomUUID } from "expo-crypto";
 import {
   Badge,
-  Button,
   Card,
   Field,
-  Heading,
-  Row,
+  Row as DetailRow,
   Screen,
 } from "@/components/camotes/ui";
-import { useDemo } from "@/state/demo";
-import { vehicles } from "@/data/mock";
+import {
+  AsyncButton,
+  ResourceState,
+  SignInRequired,
+} from "@/components/camotes/api-ui";
+import { text, rows, type Row } from "@/data/models";
+import { useApp } from "@/state/app";
+import { useResource } from "@/hooks/use-resource";
 export function Messages() {
-  const { trips } = useDemo();
+  const { signedIn, trips } = useApp();
   return (
     <Screen
       title="Good trips start with a hello"
-      subtitle="Conversations are private and connected to your booking."
+      subtitle="Private conversations connected to your bookings."
     >
-      {trips.map((t) => {
-        const v = vehicles.find((x) => x.id === t.vehicleId)!;
-        return (
+      <SignInRequired />
+      {signedIn &&
+        trips.map((t) => (
           <Card key={t.id}>
-            <Badge text={`${t.id} · RENTER / OWNER`} />
-            <Row
-              title={v.owner}
-              detail="9:41 AM"
+            <Badge text={`BOOKING #${text(t.raw.booking_number)}`} />
+            <DetailRow
+              title={t.vehicle.name}
+              detail={t.status}
               onPress={() =>
                 router.push({ pathname: "/chat/[id]", params: { id: t.id } })
               }
             />
-            <Text className="text-xs text-muted mt-3">
-              {v.name} · See you at the port! I’ll be near the entrance.
-            </Text>
           </Card>
-        );
-      })}
+        ))}
+      {signedIn && !trips.length && (
+        <Card>
+          <Text className="text-muted">
+            Your booking conversations will appear here.
+          </Text>
+        </Card>
+      )}
     </Screen>
   );
 }
 export function Chat() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { toast, trips } = useDemo();
-  const t = trips.find((x) => x.id === id);
-  const v = vehicles.find((x) => x.id === t?.vehicleId);
+  const { signedIn, session, mutate, toast } = useApp();
+  const data = useResource<Row>(
+    signedIn && id ? `/bookings/${id}/messages?limit=50` : null,
+    8000,
+  );
+  const booking = useResource<Row>(signedIn && id ? `/bookings/${id}` : null);
   const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      text: "Hello Alex! Thanks for choosing a local ride. Happy to help with your island plans.",
-      mine: false,
-    },
-    {
-      text: "We’ll meet at the main entrance of the pickup point. Just send a message when you arrive.",
-      mine: false,
-    },
-  ]);
+  const [messageId, setMessageId] = useState(() => randomUUID());
   const [blocked, setBlocked] = useState(false);
-  if (!t)
-    return (
-      <Screen title="Conversation unavailable" back>
-        <Text className="text-muted">A valid booking is required.</Text>
-      </Screen>
-    );
+  const other = booking.data
+    ? booking.data.owner_id === session?.user.id
+      ? text(booking.data.renter_id)
+      : text(booking.data.owner_id)
+    : "";
   return (
-    <Screen
-      title={v?.owner || "Booking chat"}
-      subtitle={`${id} · ${v?.name}`}
-      back
-    >
-      <Card>
-        <Badge text="BOOKING-SCOPED CONVERSATION" />
-        <View className="gap-4 mt-6 mb-6">
-          {messages.map((m, i) => (
-            <View
-              key={i}
-              className={`rounded-2xl p-4 max-w-[85%] ${m.mine ? "self-end bg-ocean" : "self-start bg-mint"}`}
-            >
-              <Text
-                className={`text-sm leading-6 ${m.mine ? "text-white" : "text-ink"}`}
+    <Screen title="Booking conversation" subtitle={id} back>
+      <SignInRequired />
+      <ResourceState {...data} retry={data.refresh} />
+      {signedIn && data.data && (
+        <Card>
+          <Badge text="BOOKING PARTICIPANTS ONLY" />
+          <View className="gap-4 my-6">
+            {rows(data.data.messages).map((m) => (
+              <View
+                key={text(m.id)}
+                className={`rounded-2xl p-4 max-w-[85%] ${m.sender_id === session?.user.id ? "self-end bg-ocean" : "self-start bg-mint"}`}
               >
-                {m.text}
-              </Text>
-              <Text
-                className={`text-[9px] mt-2 ${m.mine ? "text-white/70" : "text-muted"}`}
-              >
-                9:41 AM · {m.mine ? "Sent locally" : "Owner"}
-              </Text>
-            </View>
-          ))}
-        </View>
-        <Field
-          label="Your message"
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={blocked ? "This user is blocked" : "Say hello…"}
-          multiline
-        />
-        <Button
-          title="Send message  ↗"
-          disabled={!draft.trim() || blocked}
-          onPress={() => {
-            setMessages((old) => [...old, { text: draft, mine: true }]);
-            setDraft("");
-          }}
-        />
-        <Row
-          title="Report conversation"
-          onPress={() => toast("Demo report submitted for review.")}
-        />
-        <Row
-          title={blocked ? "Unblock user" : "Block user"}
-          onPress={() => {
-            setBlocked(!blocked);
-            toast(
-              blocked
-                ? "User unblocked."
-                : "User blocked in this demo conversation.",
-            );
-          }}
-        />
-      </Card>
+                <Text
+                  className={`text-sm leading-6 ${m.sender_id === session?.user.id ? "text-white" : "text-ink"}`}
+                >
+                  {text(m.body)}
+                </Text>
+                <Text className="text-[10px] text-muted mt-2">
+                  {new Date(text(m.created_at)).toLocaleString("en-PH", {
+                    timeZone: "Asia/Manila",
+                  })}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <Field
+            label="Your message"
+            value={draft}
+            onChangeText={(value) => {
+              setDraft(value);
+              setMessageId(randomUUID());
+            }}
+            multiline
+          />
+          <AsyncButton
+            title="Send message"
+            disabled={!draft.trim() || blocked}
+            onPress={async () => {
+              await mutate("/messages", {
+                booking_id: id,
+                body: draft,
+                request_id: messageId,
+              });
+              setDraft("");
+              setMessageId(randomUUID());
+              data.refresh();
+            }}
+          />
+          <View className="gap-3 mt-4">
+            <AsyncButton
+              secondary
+              title="Report this conversation"
+              onPress={async () => {
+                await mutate("/reports", {
+                  booking_id: id,
+                  category: "message",
+                  description: "Please review this booking conversation.",
+                });
+                toast("Conversation reported for review.");
+              }}
+            />
+            {!!other && (
+              <AsyncButton
+                secondary
+                title={blocked ? "Unblock user" : "Block user"}
+                onPress={async () => {
+                  await mutate("/blocks", {
+                    user_id: other,
+                    blocked: !blocked,
+                  });
+                  setBlocked(!blocked);
+                }}
+              />
+            )}
+          </View>
+        </Card>
+      )}
     </Screen>
   );
 }
 export function Notifications() {
-  const [read, setRead] = useState<string[]>([]);
+  const { signedIn, mutate } = useApp();
+  const data = useResource<Row[]>(signedIn ? "/notifications?limit=50" : null);
   return (
     <Screen
       title="A little island update"
-      subtitle="One inbox, all your modes."
+      subtitle="Your account’s latest notifications."
     >
-      <Heading
-        title="Today"
-        action="Mark all read"
-        onAction={() => setRead(["trip", "payment", "document"])}
-      />
-      {[
-        [
-          "trip",
-          "Your Toyota Fortuner is confirmed",
-          "Renter · Pickup at Consuelo Port, Oct 22.",
-          "/trip/CD-1028",
-        ],
-        [
-          "payment",
-          "A new booking needs your reply",
-          "Owner · Respond within 24 hours.",
-          "/provider",
-        ],
-        [
-          "document",
-          "Your verification is approved",
-          "Driver · Your professional license is verified.",
-          "/verification",
-        ],
-      ].map(([id, title, text, href]) => (
-        <Card key={id}>
-          <Badge text={read.includes(id) ? "READ" : "NEW"} />
-          <Row
-            title={title}
-            onPress={() => {
-              setRead((old) => [...old, id]);
-              router.push(href as Parameters<typeof router.push>[0]);
+      <SignInRequired />
+      <ResourceState {...data} retry={data.refresh} />
+      {signedIn && (
+        <>
+          <AsyncButton
+            secondary
+            title="Mark all read"
+            onPress={async () => {
+              await mutate("/notifications/read", {});
+              data.refresh();
             }}
           />
-          <Text className="text-xs text-muted mt-3">{text}</Text>
-        </Card>
-      ))}
+          <View className="mt-5">
+            {data.data?.map((n) => (
+              <Card key={text(n.id)}>
+                <Badge
+                  text={`${text(n.mode).toUpperCase()} · ${n.read_at ? "READ" : "NEW"}`}
+                />
+                <DetailRow
+                  title={text(n.title)}
+                  onPress={() => {
+                    void mutate("/notifications/read", { id: n.id }).then(
+                      () => {
+                        data.refresh();
+                        if (n.booking_id)
+                          router.push({
+                            pathname: "/trip/[id]",
+                            params: { id: text(n.booking_id) },
+                          });
+                      },
+                    );
+                  }}
+                />
+                <Text className="text-xs text-muted mt-3">{text(n.body)}</Text>
+              </Card>
+            ))}
+            {data.data?.length === 0 && (
+              <Card>
+                <Text className="text-muted">You’re all caught up.</Text>
+              </Card>
+            )}
+          </View>
+        </>
+      )}
     </Screen>
   );
 }

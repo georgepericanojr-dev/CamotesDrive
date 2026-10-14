@@ -1,89 +1,105 @@
 import { useState } from "react";
-import { Image, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { router } from "expo-router";
 import {
   Badge,
   Button,
   Card,
   Chip,
-  Heading,
+  Row as DetailRow,
   Screen,
 } from "@/components/camotes/ui";
-import { dateLabel, vehicles } from "@/data/mock";
-import { useDemo } from "@/state/demo";
+import { SignInRequired, ResourceState } from "@/components/camotes/api-ui";
+import { useApp } from "@/state/app";
+import { useResource } from "@/hooks/use-resource";
+import { dateLabel, mapTrip, text, type Row } from "@/data/models";
+import { photoUrl } from "@/lib/api";
 export default function Trips() {
-  const { trips, mode } = useDemo();
+  const { signedIn, mode } = useApp();
   const [tab, setTab] = useState("Upcoming");
-  const results = trips.filter((t) =>
-    tab === "Upcoming"
-      ? ["Confirmed", "Pending owner", "Pending driver"].includes(t.status)
-      : tab === "Ongoing"
-        ? ["In progress", "En route"].includes(t.status)
-        : tab === "Past"
-          ? t.status === "Completed"
-          : ["Cancelled", "Declined", "Expired", "No show"].includes(t.status),
+  const [page, setPage] = useState({ group: "", offset: 0 });
+  const group = mode + tab;
+  const offset = page.group === group ? page.offset : 0;
+  const data = useResource<Row[]>(
+    signedIn
+      ? `/bookings?limit=25&offset=${offset}&mode=${mode.toLowerCase()}&status_group=${tab.toLowerCase()}`
+      : null,
   );
+  const results = data.data || [];
   return (
     <Screen
       title={mode === "Owner" ? "Your bookings" : "Your island days"}
-      subtitle="Every adventure, all in one place."
+      subtitle="Requests, confirmed rentals, and past adventures."
     >
-      <View className="flex-row flex-wrap gap-2 mb-6">
-        {["Upcoming", "Ongoing", "Past", "Cancelled"].map((x) => (
-          <Chip
-            key={x}
-            title={x}
-            selected={tab === x}
-            onPress={() => setTab(x)}
-          />
-        ))}
-      </View>
-      {results.map((t) => {
-        const v = vehicles.find((x) => x.id === t.vehicleId)!;
-        return (
-          <Card key={t.id}>
-            <View className="flex-row gap-4">
-              <Image
-                source={v.image}
-                style={{ width: 86, height: 86, borderRadius: 16 }}
+      <SignInRequired />
+      {signedIn && (
+        <>
+          <View className="flex-row flex-wrap gap-2 mb-6">
+            {["Upcoming", "Ongoing", "Past", "Cancelled"].map((t) => (
+              <Chip
+                key={t}
+                title={t}
+                selected={t === tab}
+                onPress={() => setTab(t)}
               />
-              <View className="flex-1">
-                <Badge
-                  text={t.status.toUpperCase()}
-                  warm={t.status.includes("Pending")}
+            ))}
+          </View>
+          <ResourceState {...data} retry={data.refresh} />
+          {results.map((b) => {
+            const t = mapTrip(b, photoUrl);
+            return (
+              <Card key={t.id}>
+                <Badge text={t.status.toUpperCase()} />
+                <DetailRow
+                  title={t.vehicle.name}
+                  detail={`#${text(b.booking_number)}`}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/trip/[id]",
+                      params: { id: t.id },
+                    })
+                  }
                 />
-                <Text className="text-lg font-semibold text-ink mt-2">
-                  {v.name}
+                <Text className="text-xs text-muted my-3">
+                  {dateLabel(t.start)} — {dateLabel(t.end)} · {t.pickup}
                 </Text>
-                <Text className="text-xs text-muted mt-2">
-                  {dateLabel(t.start)} — {dateLabel(t.end)} · {t.days} days
-                </Text>
-              </View>
-            </View>
-            <Text className="text-xs text-muted my-4">
-              ⌖ {t.pickup} · 9:00 AM pickup · {t.id}
-            </Text>
+                <Button
+                  secondary
+                  title="View trip details"
+                  onPress={() =>
+                    router.push({
+                      pathname: "/trip/[id]",
+                      params: { id: t.id },
+                    })
+                  }
+                />
+              </Card>
+            );
+          })}
+          {!data.loading && !results.length && (
+            <Card>
+              <Text className="text-muted text-sm">
+                No {tab.toLowerCase()} trips yet.
+              </Text>
+            </Card>
+          )}
+          <View className="flex-row gap-3">
             <Button
-              title="View trip details  ↗"
               secondary
+              title="Previous"
+              disabled={!offset}
               onPress={() =>
-                router.push({ pathname: "/trip/[id]", params: { id: t.id } })
+                setPage({ group, offset: Math.max(0, offset - 25) })
               }
             />
-          </Card>
-        );
-      })}
-      {!results.length && (
-        <Card>
-          <Heading
-            title="Room for a new adventure"
-            sub={`No ${tab.toLowerCase()} trips just yet.`}
-          />
-          <Button
-            title="Find your next ride"
-            onPress={() => router.push("/")}
-          />
-        </Card>
+            <Button
+              secondary
+              title="Next"
+              disabled={!data.data || data.data.length < 25}
+              onPress={() => setPage({ group, offset: offset + 25 })}
+            />
+          </View>
+        </>
       )}
     </Screen>
   );

@@ -1,13 +1,8 @@
-import { useState } from "react";
-import {
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  View,
-  Pressable,
-  Switch,
-} from "react-native";
+import { useEffect, useState } from "react";
+import { Image, Platform, ScrollView, Text, View } from "react-native";
+import { router } from "expo-router";
+import * as Linking from "expo-linking";
+import { randomUUID } from "expo-crypto";
 import {
   Badge,
   Brand,
@@ -16,42 +11,98 @@ import {
   Chip,
   Field,
   Heading,
-  Row,
+  Row as DetailRow,
 } from "@/components/camotes/ui";
-import { useDemo } from "@/state/demo";
-import { money, vehicles } from "@/data/mock";
-
-// A web-only UI prototype, deliberately separate from mobile navigation.
+import { AsyncButton, ResourceState } from "@/components/camotes/api-ui";
+import { asRow, number, rows, text, type Row as DataRow } from "@/data/models";
+import { useApp } from "@/state/app";
+import { supabase } from "@/lib/supabase";
+import { signedFile } from "@/lib/uploads";
+import { useResource } from "@/hooks/use-resource";
 export default function Admin() {
-  const { chauffeur, setChauffeur, trips, updateTrip } = useDemo();
-  const [signedIn, setSignedIn] = useState(false);
-  const [email, setEmail] = useState("admin@camotesdrive.demo");
+  const { session, roles, mutate, toast } = useApp();
+  const admin = roles.some((r) => r.role === "admin" && r.status === "active");
+  const [verified, setVerified] = useState(false);
+  const [factor, setFactor] = useState("");
+  const [qr, setQr] = useState("");
+  const [secret, setSecret] = useState("");
   const [code, setCode] = useState("");
-  const [tab, setTab] = useState("Overview");
-  const [decisions, setDecisions] = useState<Record<string, string>>({});
-  const [audit, setAudit] = useState<string[]>([]);
-  const [accreditation, setAccreditation] = useState("");
-  const [expiry, setExpiry] = useState("2026-12-31");
-  const [serviceFee, setServiceFee] = useState("5");
+  const [section, setSection] = useState("overview");
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<DataRow | null>(null);
   const [reason, setReason] = useState("");
-  const [checked, setChecked] = useState<string[]>([]);
-  const [mfa, setMfa] = useState(false);
-  const log = (message: string) =>
-    setAudit((a) => [`Oct 15, 2026 · Admin demo · ${message}`, ...a]);
-  const decide = (id: string, status: string) => {
-    setDecisions((d) => ({ ...d, [id]: status }));
-    log(`${id}: ${status}${reason ? ` — ${reason}` : ""}`);
+  const [expiry, setExpiry] = useState("");
+  const [reference, setReference] = useState("");
+  const [plate, setPlate] = useState("");
+  const [dob, setDob] = useState("");
+  const [classes, setClasses] = useState("");
+  const [withDriver, setWithDriver] = useState(false);
+  const [fee, setFee] = useState("");
+  const [issued, setIssued] = useState("");
+  const [provider, setProvider] = useState("");
+  const [amount, setAmount] = useState("");
+  const [payoutKey, setPayoutKey] = useState(() => randomUUID());
+  const [refundKey, setRefundKey] = useState(() => randomUUID());
+  const [refundReference, setRefundReference] = useState("");
+  const [professionalVerified, setProfessionalVerified] = useState(false);
+  useEffect(() => {
+    let active = true;
+    if (!session) return;
+    void Promise.all([
+      supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+      supabase.auth.mfa.listFactors(),
+    ]).then(([level, factors]) => {
+      if (!active) return;
+      setVerified(level.data?.currentLevel === "aal2");
+      setFactor(
+        factors.data?.totp.find((f) => f.status === "verified")?.id || "",
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [session]);
+  const source = useResource<unknown>(
+    Platform.OS === "web" && admin && verified
+      ? `/admin/${section}?offset=${offset}&limit=25`
+      : null,
+  );
+  const pick = (row: DataRow) => {
+    setProfessionalVerified(false);
+    setRefundReference("");
+    setAmount("");
+    setRefundKey(randomUUID());
+    setSelected(row);
+    setReason("");
+    setExpiry(text(row.expires_on) || text(row.tnc_valid_until));
+    setIssued(text(row.tnc_issued_on));
+    setReference(text(row.reference_number) || text(row.tnc_number));
+    setPlate(text(row.plate_number));
+    setDob("");
+    setClasses(
+      Array.isArray(row.reviewed_vehicle_classes)
+        ? row.reviewed_vehicle_classes.join(",")
+        : "",
+    );
+    setFee(String(number(row.service_fee_bps) / 100));
+    setWithDriver(row.chauffeur_enabled === true);
+  };
+  const save = async (path: string, body: DataRow) => {
+    await mutate(path, body);
+    source.refresh();
+    setSelected(null);
+    toast("Change saved.");
   };
   if (Platform.OS !== "web")
     return (
       <View className="flex-1 bg-sand p-10 justify-center">
-        <Text className="text-ink text-lg">
-          The admin panel is available on the web only.
+        <Text className="text-ink">
+          Administration is available on the web only.
         </Text>
       </View>
     );
   return (
-    <SafeAreaView className="flex-1 bg-sand">
+    <View className="flex-1 bg-sand">
       <ScrollView
         contentContainerStyle={{
           padding: 30,
@@ -62,396 +113,602 @@ export default function Admin() {
       >
         <View className="flex-row justify-between items-center mb-8">
           <Brand />
-          <Badge text="ADMIN WEB · MOCK DATA" />
+          <Badge text="ADMIN WEB" />
         </View>
-        {!signedIn ? (
-          <View className="max-w-lg w-full self-center mt-12">
-            <Card>
-              <Heading
-                title="Your island, in good hands"
-                sub="Admin sign-in preview. Mock MFA code: 123456. No real authentication or authorization is connected."
+        {!session ? (
+          <Card>
+            <Heading
+              title="Admin sign-in"
+              sub="Use your real account. An active admin role and MFA are required."
+            />
+            <Button title="Sign in" onPress={() => router.push("/auth")} />
+          </Card>
+        ) : !admin ? (
+          <Card>
+            <Heading
+              title="Admin access required"
+              sub="Your account does not hold an active administrator role. Admin roles are assigned through trusted account administration."
+            />
+          </Card>
+        ) : !verified ? (
+          <Card>
+            <Heading
+              title="Verify multi-factor authentication"
+              sub="Use your authenticator app. No demo codes are accepted."
+            />
+            {!factor && (
+              <AsyncButton
+                title="Enroll authenticator"
+                onPress={async () => {
+                  const { data, error } = await supabase.auth.mfa.enroll({
+                    factorType: "totp",
+                    friendlyName: "CamotesDrive admin",
+                  });
+                  if (error) throw error;
+                  setFactor(data.id);
+                  setQr(data.totp.qr_code);
+                  setSecret(data.totp.secret);
+                }}
               />
-              <Field
-                label="Admin email"
-                value={email}
-                onChangeText={setEmail}
+            )}
+            {qr && (
+              <Image
+                source={{
+                  uri: `data:image/svg+xml;utf8,${encodeURIComponent(qr)}`,
+                }}
+                style={{ height: 200, width: 200 }}
               />
-              {mfa && (
-                <Field
-                  label="Multi-factor verification code"
-                  value={code}
-                  onChangeText={setCode}
-                />
-              )}
-              <Button
-                title={
-                  mfa ? "Verify & enter demo admin" : "Continue to mock MFA"
-                }
-                disabled={
-                  !email.endsWith("@camotesdrive.demo") ||
-                  (mfa && code !== "123456")
-                }
-                onPress={() => (mfa ? setSignedIn(true) : setMfa(true))}
-              />
-            </Card>
-          </View>
+            )}
+            {!!secret && (
+              <Text selectable className="text-sm text-ink my-4">
+                Manual setup secret: {secret}
+              </Text>
+            )}
+            <Field
+              label="Authenticator code"
+              value={code}
+              onChangeText={setCode}
+            />
+            <AsyncButton
+              title="Verify MFA"
+              disabled={!factor || code.length !== 6}
+              onPress={async () => {
+                const { error } = await supabase.auth.mfa.challengeAndVerify({
+                  factorId: factor,
+                  code,
+                });
+                if (error) throw error;
+                setVerified(true);
+                setSecret("");
+                setQr("");
+                source.refresh();
+              }}
+            />
+          </Card>
         ) : (
           <>
-            <View className="flex-row flex-wrap gap-2 mb-7">
+            <View className="flex-row flex-wrap gap-2 mb-6">
               {[
-                "Overview",
-                "Users",
-                "Verification",
-                "Listings",
-                "Bookings",
-                "Payments",
-                "Compliance",
-                "Disputes",
-                "Reviews",
-                "Settings",
-                "Audit log",
-              ].map((t) => (
+                "overview",
+                "users",
+                "roles",
+                "documents",
+                "vehicles",
+                "bookings",
+                "payments",
+                "payouts",
+                "disputes",
+                "reviews",
+                "settings",
+                "audit",
+              ].map((s) => (
                 <Chip
-                  key={t}
-                  title={t}
-                  selected={tab === t}
-                  onPress={() => setTab(t)}
+                  key={s}
+                  title={s}
+                  selected={section === s}
+                  onPress={() => {
+                    setSection(s);
+                    setOffset(0);
+                    setSelected(null);
+                  }}
                 />
               ))}
-              <Pressable onPress={() => setSignedIn(false)} className="p-3">
-                <Text className="text-muted text-xs">Sign out</Text>
-              </Pressable>
             </View>
             <Heading
-              title={tab}
-              sub="All actions are local preview actions; no real account, payment, or approval is affected."
+              title={section[0].toUpperCase() + section.slice(1)}
+              sub="Live data. Changes are recorded with your verified identity."
             />
-            {tab === "Overview" && (
-              <>
-                <View className="flex-row flex-wrap gap-4 mb-6">
-                  {[
-                    ["128", "Verified users"],
-                    ["34", "Active vehicles"],
-                    ["86", "October bookings"],
-                    ["₱142,800", "Rental volume"],
-                  ].map(([v, label]) => (
-                    <View
-                      key={label}
-                      className="bg-white rounded-3xl border border-[#E1E6DA] p-7 flex-1 min-w-[160px]"
-                    >
-                      <Text className="text-3xl text-ocean font-semibold">
-                        {v}
-                      </Text>
-                      <Text className="text-xs text-muted mt-3">{label}</Text>
-                    </View>
-                  ))}
-                </View>
-                <Card>
-                  <Heading title="This week on the island" />
-                  <View className="flex-row items-end gap-4 h-40">
-                    {[38, 70, 58, 100, 85, 126, 112].map((h, i) => (
-                      <View key={i} className="flex-1 items-center">
-                        <View
-                          className="bg-ocean rounded-t-lg w-full"
-                          style={{ height: h }}
-                        />
-                        <Text className="text-xs text-muted mt-2">
-                          {["M", "T", "W", "T", "F", "S", "S"][i]}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                </Card>
-                <Card>
-                  <Row
-                    title="Pending document reviews"
-                    detail="7"
-                    onPress={() => setTab("Verification")}
+            <ResourceState {...source} retry={source.refresh} />
+            {section === "overview" && source.data && (
+              <Card>
+                {Object.entries(asRow(source.data)).map(([k, v]) => (
+                  <DetailRow
+                    key={k}
+                    title={k.replaceAll("_", " ")}
+                    detail={text(v)}
                   />
-                  <Row
-                    title="Payments awaiting confirmation"
-                    detail="4"
-                    onPress={() => setTab("Payments")}
-                  />
-                  <Row
-                    title="Expiring provider documents"
-                    detail="3"
-                    onPress={() => setTab("Compliance")}
-                  />
-                  <Row
-                    title="Open disputes"
-                    detail="2"
-                    onPress={() => setTab("Disputes")}
-                  />
-                </Card>
-              </>
+                ))}
+              </Card>
             )}
-            {tab === "Users" &&
-              [
-                "Alex Morgan · Renter",
-                "Miguel Santos · Owner",
-                "Ramon Cruz · Driver",
-              ].map((u) => (
-                <Card key={u}>
-                  <Heading title={u} />
-                  <Badge text={decisions[u] || "ACTIVE"} />
-                  <View className="mt-4">
-                    <Button
+            {section === "settings" && source.data && (
+              <Card>
+                <DetailRow
+                  title="Service fee"
+                  detail={`${number(asRow(source.data).service_fee_bps) / 100}%`}
+                />
+                <DetailRow
+                  title="Chauffeured service"
+                  detail={
+                    asRow(source.data).chauffeur_enabled
+                      ? "Enabled"
+                      : "Disabled"
+                  }
+                />
+                <Button
+                  title="Edit settings"
+                  onPress={() => pick(asRow(source.data))}
+                />
+              </Card>
+            )}
+            {rows(source.data).map((row, i) => (
+              <Card
+                key={
+                  text(row.id) || `${text(row.user_id)}-${text(row.role)}-${i}`
+                }
+              >
+                <Badge
+                  text={
+                    text(row.status) ||
+                    text(row.account_status) ||
+                    text(row.action) ||
+                    section.toUpperCase()
+                  }
+                />
+                <DetailRow
+                  title={
+                    text(row.name) ||
+                    text(row.full_name) ||
+                    text(row.title) ||
+                    text(row.document_type) ||
+                    text(row.role) ||
+                    text(row.id) ||
+                    text(row.user_id)
+                  }
+                  detail={text(row.user_id) || text(row.renter_id)}
+                  onPress={() => pick(row)}
+                />
+              </Card>
+            ))}
+            {Array.isArray(source.data) && (
+              <View className="flex-row gap-3 mb-6">
+                <Button
+                  secondary
+                  title="Previous"
+                  disabled={!offset}
+                  onPress={() => setOffset((n) => Math.max(0, n - 25))}
+                />
+                <Button
+                  secondary
+                  title="Next"
+                  disabled={source.data.length < 25}
+                  onPress={() => setOffset((n) => n + 25)}
+                />
+              </View>
+            )}
+            {selected && (
+              <Card>
+                <Heading title="Review selected record" />
+                <Text selectable className="text-xs text-muted leading-5 mb-4">
+                  {text(selected.id) || text(selected.user_id)}
+                </Text>
+                {section === "documents" && (
+                  <>
+                    <AsyncButton
                       secondary
-                      title={
-                        decisions[u] === "SUSPENDED"
-                          ? "Reactivate user"
-                          : "Suspend user"
-                      }
-                      onPress={() =>
-                        decide(
-                          u,
-                          decisions[u] === "SUSPENDED" ? "ACTIVE" : "SUSPENDED",
+                      title="View private evidence"
+                      onPress={async () =>
+                        Linking.openURL(
+                          await signedFile(
+                            "verification-documents",
+                            text(selected.storage_path),
+                          ),
                         )
                       }
                     />
-                  </View>
-                </Card>
-              ))}
-            {tab === "Verification" && (
-              <Card>
-                <Heading
-                  title="Ramon Cruz · Driver renewal"
-                  sub="Professional license expires Oct 2027. Plate DEMO 1028 matches OR/CR. Every required item must pass before approval."
-                />
-                {[
-                  "Professional license",
-                  "Government ID",
-                  "NBI clearance",
-                  "PNP clearance",
-                  "Expiry dates valid",
-                  "Annual re-verification",
-                ].map((d) => (
-                  <Row
-                    key={d}
-                    title={d}
-                    detail={checked.includes(d) ? "✓ Passed" : "Review sample"}
-                    onPress={() =>
-                      setChecked((c) =>
-                        c.includes(d) ? c.filter((x) => x !== d) : [...c, d],
-                      )
-                    }
-                  />
-                ))}
-                <Field
-                  label="Review / rejection reason"
-                  value={reason}
-                  onChangeText={setReason}
-                />
-                <Badge text={decisions.Ramon || "PENDING"} />
-                <View className="gap-3 mt-4">
-                  <Button
-                    title="Approve verification"
-                    disabled={checked.length !== 6}
-                    onPress={() => decide("Ramon", "APPROVED")}
-                  />
-                  <Button
-                    secondary
-                    title="Reject with reason"
-                    disabled={!reason.trim()}
-                    onPress={() => decide("Ramon", "REJECTED")}
-                  />
-                </View>
-              </Card>
-            )}
-            {tab === "Listings" &&
-              vehicles.map((v) => (
-                <Card key={v.id}>
-                  <Heading
-                    title={v.name}
-                    sub={`${v.owner} · ${money(v.price)} / day · Self-drive`}
-                  />
-                  <Badge text={decisions[v.id] || "PENDING REVIEW"} />
-                  <Row
-                    title="Registration & CTPL insurance"
-                    detail="Valid sample documents"
-                  />
-                  <View className="gap-3 mt-4">
-                    <Button
-                      title="Approve sample listing"
-                      onPress={() => decide(v.id, "APPROVED")}
+                    <Field
+                      label="Reference / authority case"
+                      value={reference}
+                      onChangeText={setReference}
                     />
-                    <Button
-                      secondary
-                      title="Suspend listing"
-                      onPress={() => decide(v.id, "SUSPENDED")}
+                    <Field
+                      label="Plate from document"
+                      value={plate}
+                      onChangeText={setPlate}
                     />
-                  </View>
-                </Card>
-              ))}
-            {(tab === "Bookings" || tab === "Payments") &&
-              trips.map((t) => (
-                <Card key={t.id}>
-                  <Heading
-                    title={t.id}
-                    sub={`${t.status} · ${t.payment} · ${t.method}`}
-                  />
-                  <Row
-                    title="Renter / vehicle"
-                    detail={`Alex · ${vehicles.find((v) => v.id === t.vehicleId)?.name}`}
-                  />
-                  <Row
-                    title="Payment reference"
-                    detail={t.reference || "Not submitted"}
-                  />
-                  <Button
-                    title={
-                      tab === "Payments"
-                        ? "Record demo payment confirmation"
-                        : "Flag booking for review"
-                    }
-                    onPress={() => {
-                      if (tab === "Payments")
-                        updateTrip(t.id, { payment: "Paid" });
-                      log(
-                        `${t.id}: ${tab === "Payments" ? "Payment confirmed" : "Flagged for review"}`,
-                      );
-                    }}
-                  />
-                </Card>
-              ))}
-            {tab === "Compliance" && (
-              <>
-                <Card>
-                  <Heading
-                    title="Platform TNC accreditation"
-                    sub="Chauffeured service is hidden unless the demo accreditation is recorded and unexpired. These are fictional details only."
-                  />
-                  <Field
-                    label="Accreditation number (demo)"
-                    value={accreditation}
-                    onChangeText={setAccreditation}
-                  />
-                  <Field
-                    label="Valid until (YYYY-MM-DD)"
-                    value={expiry}
-                    onChangeText={setExpiry}
-                  />
-                  <View className="flex-row items-center justify-between">
-                    <Text className="text-sm text-ink">
-                      Enable chauffeured demo preview
-                    </Text>
-                    <Switch
-                      value={chauffeur}
-                      disabled={
-                        !accreditation.trim() ||
-                        !/^\d{4}-\d{2}-\d{2}$/.test(expiry) ||
-                        !Number.isFinite(Date.parse(expiry)) ||
-                        expiry <= "2026-10-24"
-                      }
-                      onValueChange={(v) => {
-                        setChauffeur(v);
-                        log(`Chauffeured demo flag: ${v}`);
-                      }}
+                    <Field
+                      label="Verified expiry (YYYY-MM-DD)"
+                      value={expiry}
+                      onChangeText={setExpiry}
                     />
-                  </View>
-                </Card>
-                <Card>
-                  <Heading title="Expiry watch" />
-                  <Row
-                    title="Miguel · Passenger insurance"
-                    detail="30 days remaining"
-                  />
-                  <Row title="Ana · CTPL insurance" detail="7 days remaining" />
-                  <Row
-                    title="Carlo · Expired license"
-                    detail="New bookings blocked"
-                  />
-                  <Row
-                    title="Affected confirmed bookings"
-                    detail="1 · Requires review"
-                  />
-                </Card>
-              </>
-            )}
-            {tab === "Disputes" && (
-              <Card>
-                <Heading
-                  title="DSP-001 · Security deposit"
-                  sub="Renter disputes a ₱1,500 withholding. Sample handover evidence attached."
-                />
-                <Field
-                  label="Resolution notes"
-                  value={reason}
-                  onChangeText={setReason}
-                  multiline
-                />
-                <Badge text={decisions.dispute || "OPEN"} />
-                <View className="mt-4">
-                  <Button
-                    title="Resolve & record deposit return"
-                    disabled={!reason.trim()}
-                    onPress={() =>
-                      decide("dispute", "RESOLVED · DEPOSIT RETURNED")
-                    }
-                  />
-                </View>
-              </Card>
-            )}
-            {tab === "Reviews" && (
-              <Card>
-                <Heading
-                  title="Jamie L. · Toyota Fortuner · 5 stars"
-                  sub="Easy pickup, lovely local owner!"
-                />
-                <Badge text={decisions.review || "PUBLISHED"} />
-                <View className="mt-4">
-                  <Button
-                    secondary
-                    title="Hide flagged review"
-                    onPress={() => decide("review", "HIDDEN")}
-                  />
-                </View>
-              </Card>
-            )}
-            {tab === "Settings" && (
-              <Card>
-                <Field
-                  label="Service fee (%)"
-                  value={serviceFee}
-                  onChangeText={setServiceFee}
-                />
-                <Row title="Cancellation window" detail="48 hours" />
-                <Row title="Provider response window" detail="24 hours" />
-                <Row title="Minimum app version" detail="1.0.0" />
-                <Row
-                  title="Pickup points"
-                  detail="Consuelo · Poro · Santiago"
-                />
-                <Button
-                  title="Save demo settings"
-                  disabled={
-                    !Number.isFinite(Number(serviceFee)) ||
-                    Number(serviceFee) < 0 ||
-                    Number(serviceFee) > 100
-                  }
-                  onPress={() =>
-                    log(
-                      `Settings saved: service fee ${serviceFee}% (preview only)`,
-                    )
-                  }
-                />
-              </Card>
-            )}
-            {tab === "Audit log" && (
-              <Card>
-                {audit.length ? (
-                  audit.map((a, i) => <Row key={i} title={a} />)
-                ) : (
-                  <Text className="text-muted text-sm">
-                    Actions you take in the demo will appear here.
-                  </Text>
+                    <Field
+                      label="Verified DOB (government ID review, optional)"
+                      value={dob}
+                      onChangeText={setDob}
+                    />
+                    <Field
+                      label="Reviewed license vehicle classes (car,suv,van,motorcycle)"
+                      value={classes}
+                      onChangeText={setClasses}
+                    />
+                    <Field
+                      label="Rejection reason"
+                      value={reason}
+                      onChangeText={setReason}
+                    />
+                    <View className="gap-3">
+                      {selected.document_type === "professional_license" && (
+                        <Chip
+                          title={
+                            professionalVerified
+                              ? "✓ Professional license verified"
+                              : "I verified this is a professional license"
+                          }
+                          selected={professionalVerified}
+                          onPress={() =>
+                            setProfessionalVerified(!professionalVerified)
+                          }
+                        />
+                      )}
+                      <AsyncButton
+                        title="Approve reviewed document"
+                        disabled={
+                          selected.document_type === "professional_license" &&
+                          !professionalVerified
+                        }
+                        onPress={() =>
+                          save(`/admin/documents/${text(selected.id)}`, {
+                            decision: "approved",
+                            reference_number: reference || undefined,
+                            plate_number: plate || undefined,
+                            expires_on: expiry || undefined,
+                            verified_date_of_birth: dob || undefined,
+                            license_kind:
+                              selected.document_type === "professional_license"
+                                ? "professional"
+                                : selected.license_kind,
+                            vehicle_classes: classes
+                              ? classes.split(",").map((s) => s.trim())
+                              : undefined,
+                          })
+                        }
+                      />
+                      <AsyncButton
+                        secondary
+                        title="Reject document"
+                        disabled={!reason.trim()}
+                        onPress={() =>
+                          save(`/admin/documents/${text(selected.id)}`, {
+                            decision: "rejected",
+                            reason,
+                          })
+                        }
+                      />
+                    </View>
+                  </>
                 )}
+                {section === "roles" && (
+                  <View className="gap-3">
+                    <AsyncButton
+                      title="Activate verified provider role"
+                      onPress={() =>
+                        save(`/admin/roles/${text(selected.user_id)}`, {
+                          role: selected.role,
+                          decision: "active",
+                        })
+                      }
+                    />
+                    <Field
+                      label="Reason"
+                      value={reason}
+                      onChangeText={setReason}
+                    />
+                    <AsyncButton
+                      secondary
+                      title="Reject request"
+                      disabled={!reason.trim()}
+                      onPress={() =>
+                        save(`/admin/roles/${text(selected.user_id)}`, {
+                          role: selected.role,
+                          decision: "rejected",
+                          reason,
+                        })
+                      }
+                    />
+                  </View>
+                )}
+                {section === "vehicles" && (
+                  <View className="gap-3">
+                    <Chip
+                      title={
+                        withDriver
+                          ? "✓ Approve with-driver eligibility"
+                          : "Self-drive only"
+                      }
+                      selected={withDriver}
+                      onPress={() => setWithDriver(!withDriver)}
+                    />
+                    <AsyncButton
+                      title="Approve eligible listing"
+                      onPress={() =>
+                        save(`/admin/vehicles/${text(selected.id)}`, {
+                          decision: "approved",
+                          with_driver: withDriver,
+                        })
+                      }
+                    />
+                    <Field
+                      label="Reason"
+                      value={reason}
+                      onChangeText={setReason}
+                    />
+                    <AsyncButton
+                      secondary
+                      title="Reject listing"
+                      disabled={!reason.trim()}
+                      onPress={() =>
+                        save(`/admin/vehicles/${text(selected.id)}`, {
+                          decision: "rejected",
+                          reason,
+                        })
+                      }
+                    />
+                  </View>
+                )}
+                {section === "users" && (
+                  <AsyncButton
+                    secondary
+                    title={
+                      selected.account_status === "suspended"
+                        ? "Reactivate user"
+                        : "Suspend user"
+                    }
+                    onPress={() =>
+                      save(`/admin/users/${text(selected.id)}`, {
+                        status:
+                          selected.account_status === "suspended"
+                            ? "active"
+                            : "suspended",
+                      })
+                    }
+                  />
+                )}
+                {section === "bookings" && (
+                  <Button
+                    title="Open booking"
+                    onPress={() =>
+                      router.push({
+                        pathname: "/trip/[id]",
+                        params: { id: text(selected.id) },
+                      })
+                    }
+                  />
+                )}
+                {section === "payments" && (
+                  <View className="gap-3">
+                    {!!selected.proof_path && (
+                      <AsyncButton
+                        secondary
+                        title="View payment proof"
+                        onPress={async () =>
+                          Linking.openURL(
+                            await signedFile(
+                              "payment-proofs",
+                              text(selected.proof_path),
+                            ),
+                          )
+                        }
+                      />
+                    )}
+                    <DetailRow
+                      title="Amount"
+                      detail={`${number(selected.amount_centavos) / 100} PHP`}
+                    />
+                    <DetailRow
+                      title="Reference"
+                      detail={text(selected.reference_number)}
+                    />
+                    <AsyncButton
+                      title="Confirm verified receipt"
+                      disabled={selected.status !== "pending_verification"}
+                      onPress={() =>
+                        save(`/payments/${text(selected.id)}/confirm`, {})
+                      }
+                    />
+                    <Field
+                      label="Refund amount (PHP, already transferred)"
+                      value={amount}
+                      onChangeText={setAmount}
+                    />
+                    <Field
+                      label="Refund transfer reference"
+                      value={refundReference}
+                      onChangeText={setRefundReference}
+                    />
+                    <Field
+                      label="Refund reason"
+                      value={reason}
+                      onChangeText={setReason}
+                    />
+                    <AsyncButton
+                      secondary
+                      title="Record completed manual refund"
+                      disabled={!amount || !refundReference || !reason}
+                      onPress={() =>
+                        save("/settlements", {
+                          booking_id: selected.booking_id,
+                          event_type: "refund",
+                          amount_centavos: Math.round(Number(amount) * 100),
+                          method: "bank_transfer",
+                          reference_number: refundReference,
+                          reason,
+                          request_id: refundKey,
+                        })
+                      }
+                    />
+                  </View>
+                )}
+                {section === "disputes" && (
+                  <View className="gap-3">
+                    <Text className="text-sm text-ink">
+                      {text(selected.description)}
+                    </Text>
+                    <AsyncButton
+                      title="Assign investigation to me"
+                      onPress={() =>
+                        save(`/admin/disputes/${text(selected.id)}`, {
+                          status: "investigating",
+                        })
+                      }
+                    />
+                    {!!selected.booking_id && (
+                      <Button
+                        secondary
+                        title="Open reported booking chat"
+                        onPress={() =>
+                          router.push({
+                            pathname: "/chat/[id]",
+                            params: { id: text(selected.booking_id) },
+                          })
+                        }
+                      />
+                    )}
+                    <Field
+                      label="Resolution"
+                      value={reason}
+                      onChangeText={setReason}
+                      multiline
+                    />
+                    <AsyncButton
+                      secondary
+                      title="Resolve ticket"
+                      disabled={!reason.trim()}
+                      onPress={() =>
+                        save(`/admin/disputes/${text(selected.id)}`, {
+                          status: "resolved",
+                          resolution: reason,
+                        })
+                      }
+                    />
+                  </View>
+                )}
+                {section === "reviews" && (
+                  <>
+                    <Text className="text-sm text-ink mb-4">
+                      {text(selected.comment)}
+                    </Text>
+                    <AsyncButton
+                      secondary
+                      title={selected.hidden ? "Publish review" : "Hide review"}
+                      onPress={() =>
+                        save(`/admin/reviews/${text(selected.id)}`, {
+                          hidden: !selected.hidden,
+                        })
+                      }
+                    />
+                  </>
+                )}
+                {section === "settings" && (
+                  <>
+                    <Field
+                      label="Service fee (%)"
+                      value={fee}
+                      onChangeText={setFee}
+                    />
+                    <Field
+                      label="TNC accreditation number"
+                      value={reference}
+                      onChangeText={setReference}
+                    />
+                    <Field
+                      label="Issue date (YYYY-MM-DD)"
+                      value={issued}
+                      onChangeText={setIssued}
+                    />
+                    <Field
+                      label="Valid through (YYYY-MM-DD)"
+                      value={expiry}
+                      onChangeText={setExpiry}
+                    />
+                    <Chip
+                      title={
+                        withDriver
+                          ? "Enable chauffeured service"
+                          : "Chauffeured service disabled"
+                      }
+                      selected={withDriver}
+                      onPress={() => setWithDriver(!withDriver)}
+                    />
+                    <View className="mt-4">
+                      <AsyncButton
+                        title="Save platform settings"
+                        onPress={() =>
+                          save("/admin/settings", {
+                            service_fee_bps: Math.round(Number(fee) * 100),
+                            chauffeur_enabled: withDriver,
+                            tnc_number: reference || undefined,
+                            tnc_issued_on: issued || undefined,
+                            tnc_valid_until: expiry || undefined,
+                            tnc_status: withDriver
+                              ? "active"
+                              : selected.tnc_status,
+                          })
+                        }
+                      />
+                    </View>
+                  </>
+                )}
+              </Card>
+            )}
+            {section === "payouts" && (
+              <Card>
+                <Heading
+                  title="Record completed manual payout"
+                  sub="Transfer funds outside the app, then record the actual reference here."
+                />
+                <Field
+                  label="Provider account UUID"
+                  value={provider}
+                  onChangeText={setProvider}
+                />
+                <Field
+                  label="Amount paid (PHP)"
+                  value={amount}
+                  onChangeText={setAmount}
+                />
+                <Field
+                  label="Bank transfer reference"
+                  value={reference}
+                  onChangeText={setReference}
+                />
+                <AsyncButton
+                  title="Record payout"
+                  disabled={!provider || !amount || !reference}
+                  onPress={async () => {
+                    await save("/admin/payouts", {
+                      provider_id: provider,
+                      amount_centavos: Math.round(Number(amount) * 100),
+                      method: "bank_transfer",
+                      reference_number: reference,
+                      request_id: payoutKey,
+                    });
+                    setPayoutKey(randomUUID());
+                  }}
+                />
               </Card>
             )}
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }

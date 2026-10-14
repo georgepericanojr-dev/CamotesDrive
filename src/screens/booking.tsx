@@ -1,223 +1,273 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { randomUUID } from "expo-crypto";
 import {
   Badge,
-  Button,
   Card,
   Chip,
   Field,
   Heading,
-  Row,
+  Row as DetailRow,
   Screen,
 } from "@/components/camotes/ui";
-import { money, pickupPoints, vehicles } from "@/data/mock";
-import { useDemo } from "@/state/demo";
+import {
+  AsyncButton,
+  ResourceState,
+  SignInRequired,
+} from "@/components/camotes/api-ui";
+import { api, photoUrl } from "@/lib/api";
+import {
+  asRow,
+  manilaDate,
+  mapVehicle,
+  php,
+  text,
+  type Row,
+} from "@/data/models";
+import { useApp } from "@/state/app";
+import { useResource } from "@/hooks/use-resource";
 export default function Booking() {
   const { vehicleId } = useLocalSearchParams<{ vehicleId: string }>();
-  const v = vehicles.find((x) => x.id === vehicleId) || vehicles[0];
-  const { addTrip, toast, chauffeur, signedIn } = useDemo();
-  const [step, setStep] = useState(0);
-  const [start, setStart] = useState("2026-10-22");
-  const [end, setEnd] = useState("2026-10-24");
-  const [pickup, setPickup] = useState(pickupPoints[0]);
-  const [custom, setCustom] = useState("");
-  const [driver, setDriver] = useState(false);
-  const [method, setMethod] = useState("Cash on pickup");
-  const [agreed, setAgreed] = useState(false);
+  const { signedIn, chauffeur, mutate, toast } = useApp();
+  const vehicle = useResource<Row[]>(
+    vehicleId ? `/vehicles/${vehicleId}` : null,
+  );
+  const locations = useResource<Row[]>("/locations");
+  const [start, setStart] = useState(manilaDate(1));
+  const [end, setEnd] = useState(manilaDate(3));
+  const [location, setLocation] = useState("");
+  const [address, setAddress] = useState("");
+  const [town, setTown] = useState("San Francisco");
+  const [method, setMethod] = useState("cash");
+  const [driver, setDriver] = useState("");
   const [authorized, setAuthorized] = useState("");
-  const days = Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000);
-  const valid =
-    /^2026-\d{2}-\d{2}$/.test(start) &&
-    /^2026-\d{2}-\d{2}$/.test(end) &&
-    Number.isFinite(days) &&
-    days > 0 &&
-    days <= 30 &&
-    start >= "2026-10-15";
-  const subtotal = v.price * (valid ? days : 0);
-  const driverFee = driver ? 1200 * days : 0;
-  const fee = Math.round((subtotal + driverFee) * 0.05);
+  const [agreed, setAgreed] = useState(false);
+  const [quote, setQuote] = useState<Row | null>(null);
+  const [quotedInput, setQuotedInput] = useState("");
+  const [step, setStep] = useState(0);
+  const drivers = useResource<Row[]>(
+    signedIn && chauffeur ? `/drivers?through=${end}` : null,
+  );
+  const v = vehicle.data?.[0] ? mapVehicle(vehicle.data[0], photoUrl) : null;
+  const input = {
+    vehicle_id: vehicleId,
+    starts_at: `${start}T09:00:00+08:00`,
+    ends_at: `${end}T09:00:00+08:00`,
+    pickup_location_id: location || undefined,
+    return_location_id: location || undefined,
+    pickup_address: location ? undefined : address,
+    return_address: location ? undefined : address,
+    pickup_town: location
+      ? text(locations.data?.find((l) => l.id === location)?.town)
+      : town,
+    driver_id: driver || undefined,
+    payment_method: method,
+    authorized_driver_ids: authorized
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+  };
+  const fingerprint = JSON.stringify(input);
+  const requestKey = useMemo(
+    () => ({ fingerprint, id: randomUUID() }),
+    [fingerprint],
+  );
   return (
     <Screen
       title="Make it an island date"
-      subtitle={`${v.name} · ${money(v.price)} per 24 hours`}
+      subtitle={v?.name || "Choose your rental details"}
       back
     >
-      <View className="flex-row gap-2 mb-6">
-        {["Your trip", "Payment", "Review"].map((x, i) => (
-          <Chip
-            key={x}
-            title={`${i + 1}. ${x}`}
-            selected={step === i}
-            onPress={() => i < step && setStep(i)}
-          />
-        ))}
-      </View>
-      <Card>
-        {step === 0 ? (
-          <>
-            <Heading title="The little details" />
-            <Field
-              label="Pickup date (YYYY-MM-DD) · 9:00 AM"
-              value={start}
-              onChangeText={setStart}
-            />
-            <Field
-              label="Return date (YYYY-MM-DD) · 9:00 AM"
-              value={end}
-              onChangeText={setEnd}
-            />
-            <Text className="text-xs text-muted mb-3">
-              Pickup and return location
-            </Text>
-            <View className="flex-row flex-wrap gap-2 mb-4">
-              {[...pickupPoints, "Custom address"].map((p) => (
-                <Chip
-                  key={p}
-                  title={p}
-                  selected={pickup === p}
-                  onPress={() => setPickup(p)}
+      <SignInRequired />
+      <ResourceState {...vehicle} retry={vehicle.refresh} />
+      {v && signedIn && (
+        <>
+          <View className="flex-row flex-wrap gap-2 mb-5">
+            {["Your trip", "Payment", "Review"].map((s, i) => (
+              <Chip
+                key={s}
+                title={`${i + 1}. ${s}`}
+                selected={step === i}
+                onPress={() => i < step && setStep(i)}
+              />
+            ))}
+          </View>
+          <Card>
+            {step === 0 ? (
+              <>
+                <Heading title="The little details" />
+                <Field
+                  label="Pickup date (YYYY-MM-DD) · 9 AM"
+                  value={start}
+                  onChangeText={setStart}
                 />
-              ))}
-            </View>
-            {pickup === "Custom address" && (
-              <Field
-                label="Pickup address"
-                value={custom}
-                onChangeText={setCustom}
-              />
-            )}
-            <Badge text="✓ LICENSE & ID VERIFIED · DEMO" />
-            <View className="mt-4">
-              <Field
-                label="Additional authorized driver (optional; verified demo profile)"
-                value={authorized}
-                onChangeText={setAuthorized}
-                placeholder="Full name"
-              />
-            </View>
-            {chauffeur && (
-              <View className="gap-3 mb-4">
+                <Field
+                  label="Return date (YYYY-MM-DD) · 9 AM"
+                  value={end}
+                  onChangeText={setEnd}
+                />
+                <ResourceState {...locations} retry={locations.refresh} />
+                <View className="flex-row flex-wrap gap-2 mb-4">
+                  {locations.data?.map((l) => (
+                    <Chip
+                      key={text(l.id)}
+                      title={text(l.name)}
+                      selected={location === l.id}
+                      onPress={() => setLocation(text(l.id))}
+                    />
+                  ))}
+                  <Chip
+                    title="Custom address"
+                    selected={!location}
+                    onPress={() => setLocation("")}
+                  />
+                </View>
+                {!location && (
+                  <>
+                    <Field
+                      label="Pickup & return address"
+                      value={address}
+                      onChangeText={setAddress}
+                    />
+                    <View className="flex-row flex-wrap gap-2 mb-4">
+                      {["San Francisco", "Poro", "Tudela", "Pilar"].map((t) => (
+                        <Chip
+                          key={t}
+                          title={t}
+                          selected={town === t}
+                          onPress={() => setTown(t)}
+                        />
+                      ))}
+                    </View>
+                  </>
+                )}
+                <Field
+                  label="Additional verified self-drive account IDs (optional, comma separated)"
+                  value={authorized}
+                  onChangeText={setAuthorized}
+                />
+                <Badge text="LICENSE, AGE & ID ARE CHECKED BY THE SERVER" />
+                {chauffeur && v.raw.with_driver_eligible === true && (
+                  <View className="mt-4 gap-2">
+                    <Heading title="A local driver" />
+                    <Chip
+                      title="Self-drive"
+                      selected={!driver}
+                      onPress={() => setDriver("")}
+                    />
+                    <ResourceState {...drivers} retry={drivers.refresh} />
+                    {drivers.data?.map((d) => (
+                      <Chip
+                        key={text(d.id)}
+                        title={`${text(d.name)} · ${php(d.daily_fee_centavos)} / day`}
+                        selected={driver === d.id}
+                        onPress={() => {
+                          setDriver(text(d.id));
+                          setAuthorized("");
+                        }}
+                      />
+                    ))}
+                  </View>
+                )}
+                <View className="mt-5">
+                  <AsyncButton
+                    title="Continue to payment"
+                    disabled={!start || !end || (!location && !address.trim())}
+                    onPress={async () => setStep(1)}
+                  />
+                </View>
+              </>
+            ) : step === 1 ? (
+              <>
+                <Heading
+                  title="Pay your way"
+                  sub="Payments happen directly with your owner. No online funds are collected here."
+                />
+                <View className="gap-3 mb-5">
+                  {["cash", "gcash", "maya", "bank_transfer"].map((m) => (
+                    <Chip
+                      key={m}
+                      title={
+                        m === "cash" ? "Cash on pickup" : m.replaceAll("_", " ")
+                      }
+                      selected={method === m}
+                      onPress={() => setMethod(m)}
+                    />
+                  ))}
+                </View>
+                <AsyncButton
+                  title="Get server price & review"
+                  onPress={async () => {
+                    const price = await api<Row>("/bookings/quote", input);
+                    setQuote(price);
+                    setQuotedInput(fingerprint);
+                    setStep(2);
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                <Heading title="Your adventure, at a glance" />
+                <DetailRow title="Dates" detail={`${start} → ${end}`} />
+                <DetailRow
+                  title="Vehicle rental"
+                  detail={php(quote?.vehicle_centavos)}
+                />
+                <DetailRow
+                  title="Driver fee"
+                  detail={php(quote?.driver_centavos)}
+                />
+                <DetailRow
+                  title="Service fee"
+                  detail={php(quote?.service_fee_centavos)}
+                />
+                <DetailRow
+                  title="Rental total"
+                  detail={php(quote?.total_centavos)}
+                />
+                <DetailRow
+                  title="Refundable deposit · separate"
+                  detail={php(quote?.deposit_centavos)}
+                />
+                <Text className="text-xs text-muted my-4 leading-5">
+                  This is a request, not a confirmation. The server checks
+                  availability, verification, and all required provider
+                  acceptances. Upload ID/license documents first if needed.
+                </Text>
                 <Chip
                   title={
-                    driver
-                      ? "✓ With verified driver · ₱1,200/day"
-                      : "Self-drive · add a verified driver"
+                    agreed
+                      ? "✓ Rental terms accepted"
+                      : "Accept rental terms & cancellation policy"
                   }
-                  selected={driver}
-                  onPress={() => setDriver(!driver)}
+                  selected={agreed}
+                  onPress={() => setAgreed(!agreed)}
                 />
-                {driver && (
-                  <Text className="text-xs text-muted">
-                    Ramon Cruz · Professional license verified{"\n"}Vehicle
-                    plate: DEMO 1028 · LTFRB case: DEMO-2026-01{"\n"}Demo
-                    accreditation active through Dec 31, 2026.
-                  </Text>
-                )}
-              </View>
+                <View className="mt-5">
+                  <AsyncButton
+                    title="Send booking request"
+                    disabled={!agreed || fingerprint !== quotedInput}
+                    onPress={async () => {
+                      const created = await mutate<Row>("/bookings", {
+                        ...input,
+                        request_id: requestKey.id,
+                        accept_terms: agreed,
+                        expected_total_centavos: quote?.total_centavos,
+                      });
+                      toast("Booking request sent.");
+                      router.replace({
+                        pathname: "/trip/[id]",
+                        params: { id: text(asRow(created).id) },
+                      });
+                    }}
+                  />
+                </View>
+              </>
             )}
-            <Button
-              title="Continue to payment"
-              disabled={
-                !valid || (pickup === "Custom address" && !custom.trim())
-              }
-              onPress={() => setStep(1)}
-            />
-            {!valid && (
-              <Text className="text-xs text-[#A45C38] mt-3">
-                Choose valid future dates, 1–30 days apart.
-              </Text>
-            )}
-          </>
-        ) : step === 1 ? (
-          <>
-            <Heading
-              title="Pay your way"
-              sub="Payments happen outside the app. Your owner confirms receipt. No funds move in this demo."
-            />
-            <View className="gap-3 mb-5">
-              {["Cash on pickup", "GCash", "Maya", "Bank transfer"].map((m) => (
-                <Chip
-                  key={m}
-                  title={m}
-                  selected={method === m}
-                  onPress={() => setMethod(m)}
-                />
-              ))}
-            </View>
-            <Text className="text-xs text-muted leading-5 mb-5">
-              You can submit a reference and sample proof from your trip after
-              the owner accepts your request.
-            </Text>
-            <Button title="Review request" onPress={() => setStep(2)} />
-          </>
-        ) : (
-          <>
-            <Heading title="Your adventure, at a glance" />
-            <Row title="Rental dates" detail={`${start} → ${end}`} />
-            <Row
-              title="Pickup & return"
-              detail={pickup === "Custom address" ? custom : pickup}
-            />
-            <Row title={`Vehicle · ${days} days`} detail={money(subtotal)} />
-            {driver && (
-              <Row title="Verified driver" detail={money(driverFee)} />
-            )}
-            <Row title="Service fee · 5%" detail={money(fee)} />
-            <Row
-              title="Rental total"
-              detail={money(subtotal + driverFee + fee)}
-            />
-            <Row
-              title="Refundable deposit (separate)"
-              detail={money(v.deposit)}
-            />
-            <Row title="Payment method" detail={method} />
-            <Text className="text-xs text-muted leading-5 my-4">
-              Owner approval is needed. This request does not reserve
-              availability. Your refundable deposit is separate from the rental
-              total.
-            </Text>
-            <Chip
-              title={
-                agreed
-                  ? "✓ Rental terms & cancellation policy accepted"
-                  : "Accept rental terms & cancellation policy"
-              }
-              selected={agreed}
-              onPress={() => setAgreed(!agreed)}
-            />
-            <View className="mt-5">
-              <Button
-                title="Send booking request  ↗"
-                disabled={!agreed}
-                onPress={() => {
-                  if (!signedIn) {
-                    router.push("/auth");
-                    return;
-                  }
-                  const id = `CD-${Date.now().toString().slice(-6)}`;
-                  addTrip({
-                    id,
-                    vehicleId: v.id,
-                    status: "Pending owner",
-                    payment: "Unpaid",
-                    start,
-                    end,
-                    days,
-                    pickup: pickup === "Custom address" ? custom : pickup,
-                    method,
-                    driver,
-                    authorizedDriver: authorized,
-                  });
-                  toast("Request sent. Your owner has 24 hours to respond.");
-                  router.replace({ pathname: "/trip/[id]", params: { id } });
-                }}
-              />
-            </View>
-          </>
-        )}
-      </Card>
+          </Card>
+        </>
+      )}
     </Screen>
   );
 }

@@ -10,8 +10,8 @@ import {
 } from "react-native";
 import { router, usePathname, type Href } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useDemo } from "@/state/demo";
-import { money, type Vehicle } from "@/data/mock";
+import { useApp } from "@/state/app";
+import { money, type Vehicle } from "@/data/models";
 export function Icon({
   name,
   size = 21,
@@ -217,7 +217,7 @@ export function Row({
   );
 }
 export function VehicleCard({ vehicle }: { vehicle: Vehicle }) {
-  const { favorites, toggleFavorite } = useDemo();
+  const { favorites, toggleFavorite } = useApp();
   return (
     <View
       className="bg-white rounded-3xl overflow-hidden border border-[#E2E6DE] flex-1"
@@ -304,9 +304,16 @@ export function Brand() {
   );
 }
 export function Avatar() {
+  const { name } = useApp();
   return (
     <View className="w-9 h-9 rounded-full bg-[#E9D9C5] items-center justify-center border-2 border-white">
-      <Text className="text-xs font-bold text-[#745C40]">AM</Text>
+      <Text className="text-xs font-bold text-[#745C40]">
+        {name
+          .split(" ")
+          .map((s) => s[0])
+          .slice(0, 2)
+          .join("")}
+      </Text>
     </View>
   );
 }
@@ -324,7 +331,18 @@ export function Screen({
   const { width } = useWindowDimensions();
   const wide = width >= 1000;
   const path = usePathname();
-  const { mode, setMode, notice, toast, name } = useDemo();
+  const {
+    mode,
+    modes,
+    setMode,
+    notice,
+    toast,
+    name,
+    signedIn,
+    loading,
+    error,
+    refresh,
+  } = useApp();
   const nav =
     mode === "Renter"
       ? [
@@ -373,11 +391,6 @@ export function Screen({
         >
           {label}
         </Text>
-        {!mobile && label === "Messages" && (
-          <View className="ml-auto bg-ocean rounded-full w-5 h-5 items-center justify-center">
-            <Text className="text-[9px] text-white">2</Text>
-          </View>
-        )}
       </Pressable>
     );
   };
@@ -435,10 +448,20 @@ export function Screen({
               <Pressable
                 accessibilityRole="button"
                 onPress={() => {
-                  const modes = ["Renter", "Owner", "Driver"] as const;
+                  if (!signedIn) {
+                    router.push("/auth");
+                    return;
+                  }
+                  if (modes.length === 1) {
+                    router.push("/profile");
+                    return;
+                  }
                   const next = modes[(modes.indexOf(mode) + 1) % 3];
-                  setMode(next);
-                  router.push(next === "Renter" ? "/" : "/provider");
+                  void setMode(next)
+                    .then(() =>
+                      router.push(next === "Renter" ? "/" : "/provider"),
+                    )
+                    .catch((e) => toast(e.message));
                 }}
                 className="bg-mint rounded-full px-3 py-2"
               >
@@ -452,7 +475,6 @@ export function Screen({
                 onPress={() => router.push("/notifications")}
               >
                 <Icon name="bell" />
-                <View className="absolute right-0 top-0 bg-coral w-1.5 h-1.5 rounded-full" />
               </Pressable>
               {wide && <Avatar />}
             </View>
@@ -479,6 +501,29 @@ export function Screen({
               </Pressable>
             )}
             {title && <Heading title={title} sub={subtitle} />}
+            {loading && (
+              <Text className="text-xs text-muted mb-4">
+                Connecting to your island…
+              </Text>
+            )}
+            {!!error && (
+              <View className="bg-[#FFF1E2] rounded-2xl p-4 mb-4">
+                <Text
+                  accessibilityRole="alert"
+                  className="text-sm text-ink mb-3"
+                >
+                  {error}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void refresh()}
+                >
+                  <Text className="text-sm text-ocean font-semibold">
+                    Retry connection
+                  </Text>
+                </Pressable>
+              </View>
+            )}
             {children}
             <View className="mt-10 flex-row justify-between border-t border-[#E0E5DA] pt-5">
               <Text className="text-[10px] text-muted">

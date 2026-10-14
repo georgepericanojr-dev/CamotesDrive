@@ -1,340 +1,463 @@
 import { useState } from "react";
 import { Image, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import * as Linking from "expo-linking";
+import { randomUUID } from "expo-crypto";
 import {
   Badge,
-  Button,
   Card,
   Chip,
   Field,
   Heading,
-  Row,
+  Row as DetailRow,
   Screen,
+  Button,
 } from "@/components/camotes/ui";
-import { dateLabel, money, vehicles } from "@/data/mock";
-import { useDemo } from "@/state/demo";
+import {
+  AsyncButton,
+  ResourceState,
+  SignInRequired,
+} from "@/components/camotes/api-ui";
+import { dateLabel, mapTrip, php, rows, text, type Row } from "@/data/models";
+import { photoUrl } from "@/lib/api";
+import { pickUpload, signedFile } from "@/lib/uploads";
+import { useApp } from "@/state/app";
+import { useResource } from "@/hooks/use-resource";
 export default function TripDetails() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { trips, updateTrip, toast, mode } = useDemo();
-  const t = trips.find((x) => x.id === id);
+  const { signedIn, session, mutate, toast } = useApp();
+  const data = useResource<Row>(signedIn && id ? `/bookings/${id}` : null);
   const [reference, setReference] = useState("");
-  const [proof, setProof] = useState(false);
-  const [cancel, setCancel] = useState(false);
+  const [proof, setProof] = useState("");
+  const [method, setMethod] = useState("gcash");
+  const [reason, setReason] = useState("");
   const [rating, setRating] = useState(5);
   const [review, setReview] = useState("");
   const [notes, setNotes] = useState("");
-  const [photos, setPhotos] = useState(false);
-  if (!t)
-    return (
-      <Screen title="Trip not found" back>
-        <Button
-          title="View all trips"
-          onPress={() => router.replace("/trips")}
-        />
-      </Screen>
-    );
-  const v = vehicles.find((x) => x.id === t.vehicleId)!;
-  const active = ![
-    "Cancelled",
-    "Completed",
-    "Declined",
-    "Expired",
-    "No show",
-  ].includes(t.status);
-  const freeCancellation =
-    Date.parse(`${t.start}T09:00:00+08:00`) -
-      Date.parse("2026-10-15T09:00:00+08:00") >=
-    48 * 3600000;
-  const confirmed = [
-    "Confirmed",
-    "In progress",
-    "En route",
-    "Completed",
-  ].includes(t.status);
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [paymentKey, setPaymentKey] = useState(() => randomUUID());
+  const b = data.data;
+  const t = b ? mapTrip(b, photoUrl) : null;
+  const actor = session?.user.id;
+  const renter = actor === b?.renter_id;
+  const owner = actor === b?.owner_id;
+  const driver = actor === b?.driver_id;
+  const pending = ["pending_owner", "pending_driver"].includes(text(b?.status));
+  const active = [
+    ...["pending_owner", "pending_driver", "confirmed", "in_progress"],
+  ].includes(text(b?.status));
+  const action = async (verb: string, body: Row = {}) => {
+    await mutate(`/bookings/${id}/${verb}`, body);
+    data.refresh();
+  };
   return (
-    <Screen title="Your trip details" subtitle={t.id} back>
-      <Image
-        source={v.image}
-        style={{
-          height: 240,
-          width: "100%",
-          borderRadius: 24,
-          marginBottom: 20,
-        }}
-      />
-      <Card>
-        <Badge text={t.status.toUpperCase()} />
-        <View className="mt-4">
-          <Heading title={v.name} />
-        </View>
-        <Row
-          title="Island dates"
-          detail={`${dateLabel(t.start)} — ${dateLabel(t.end)}`}
-        />
-        <Row title="Pickup & return" detail={`${t.pickup} · 9:00 AM`} />
-        <Row
-          title="Service"
-          detail={t.driver ? "With verified driver" : "Self-drive"}
-        />
-        {t.authorizedDriver && (
-          <Row
-            title="Authorized additional driver"
-            detail={`${t.authorizedDriver} · Demo verified`}
-          />
-        )}
-        {t.driver && (
-          <Row
-            title="Driver / vehicle authority"
-            detail="Ramon Cruz · DEMO 1028 · LTFRB DEMO-2026-01"
-          />
-        )}
-        <Row
-          title="Rental + service fee"
-          detail={money(
-            Math.round((v.price + (t.driver ? 1200 : 0)) * t.days * 1.05),
-          )}
-        />
-        <Row
-          title="Deposit"
-          detail={`${money(v.deposit)} · ${t.status === "Completed" ? "Returned" : "Due at pickup"}`}
-        />
-        <Row title="Payment" detail={`${t.payment} · ${t.method}`} />
-        <Text className="text-xs text-muted leading-5 mt-4">
-          {confirmed
-            ? "✓ Owner accepted. Your pickup details are ready."
-            : "Waiting for owner approval. Response window: 24 hours. Availability will be checked again before confirmation."}
-        </Text>
-      </Card>
-      <Card>
-        <Heading title="Your local connection" />
-        <Text className="font-semibold text-ocean">
-          {v.owner} · Verified owner
-        </Text>
-        <Text className="text-xs text-muted mt-2 mb-4">
-          {confirmed
-            ? "+63 917 000 1028 · Demo contact"
-            : "Contact details appear after confirmation."}
-        </Text>
-        <Button
-          title="Message about this booking"
-          secondary
-          onPress={() =>
-            router.push({ pathname: "/chat/[id]", params: { id: t.id } })
-          }
-        />
-        {confirmed && (
-          <View className="mt-3">
-            <Button
-              secondary
-              title="Pickup directions"
-              onPress={() =>
-                toast(
-                  `Demo directions: meet at ${t.pickup}, main entrance, 9:00 AM.`,
-                )
-              }
-            />
-          </View>
-        )}
-      </Card>
-      {confirmed && t.payment === "Unpaid" && t.method !== "Cash on pickup" && (
-        <Card>
-          <Heading
-            title="Submit your payment"
-            sub="Use the sample payment details below. No money moves in the demo."
-          />
-          <Row title={`${t.method} account`} detail="DEMO · 0917 000 0000" />
-          <View className="mt-4">
-            <Field
-              label="Payment reference number"
-              value={reference}
-              onChangeText={setReference}
-            />
-            <Button
-              secondary
-              title={
-                proof
-                  ? "✓ Sample proof attached"
-                  : "Attach sample payment proof"
-              }
-              onPress={() => setProof(!proof)}
-            />
-          </View>
-          <View className="mt-4">
-            <Button
-              title="Submit for verification"
-              disabled={!reference.trim()}
-              onPress={() => {
-                updateTrip(t.id, {
-                  payment: "Pending verification",
-                  reference,
-                });
-                toast("Payment reference submitted for review.");
-              }}
-            />
-          </View>
-        </Card>
-      )}
-      {mode !== "Renter" && active && (
-        <Card>
-          <Heading
-            title={mode === "Owner" ? "Manage this rental" : "Your next step"}
-          />
-          {t.status === "Pending owner" && mode === "Owner" && (
-            <View className="gap-3">
-              <Button
-                title="Accept request (demo)"
-                onPress={() =>
-                  updateTrip(t.id, {
-                    status: t.driver ? "Pending driver" : "Confirmed",
-                  })
-                }
-              />
-              <Button
-                secondary
-                title="Decline request"
-                onPress={() => updateTrip(t.id, { status: "Declined" })}
-              />
-            </View>
-          )}
-          {t.status === "Pending driver" && mode === "Driver" && (
-            <View className="gap-3">
-              <Button
-                title="Accept driver assignment"
-                onPress={() => updateTrip(t.id, { status: "Confirmed" })}
-              />
-              <Button
-                secondary
-                title="Decline assignment"
-                onPress={() => {
-                  updateTrip(t.id, { status: "Declined" });
-                  toast(
-                    "Driver declined. Renter may rebook self-drive or choose another driver.",
-                  );
-                }}
-              />
-            </View>
-          )}
-          {confirmed && (
-            <>
-              <Field
-                label="Condition notes"
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-              />
-              <Button
-                secondary
-                title={
-                  photos
-                    ? "✓ 3 sample condition photos attached"
-                    : "Attach sample handover photos"
-                }
-                onPress={() => setPhotos(!photos)}
-              />
-              <View className="mt-3">
-                <Button
-                  title={
-                    t.status === "Confirmed"
-                      ? mode === "Driver"
-                        ? "Mark en route"
-                        : "Complete handover & start rental"
-                      : t.status === "En route"
-                        ? "Start trip"
-                        : "Complete return & rental"
-                  }
-                  onPress={() => {
-                    if (mode === "Owner" && !photos) {
-                      toast("Attach condition photos before pickup or return.");
-                      return;
-                    }
-                    updateTrip(t.id, {
-                      status:
-                        t.status === "Confirmed"
-                          ? mode === "Driver"
-                            ? "En route"
-                            : "In progress"
-                          : t.status === "En route"
-                            ? "In progress"
-                            : "Completed",
-                    });
-                    toast("Demo trip status updated.");
-                  }}
-                />
-              </View>
-            </>
-          )}
-          {t.payment === "Pending verification" && (
-            <View className="mt-3">
-              <Button
-                title="Confirm payment receipt (demo)"
-                onPress={() => updateTrip(t.id, { payment: "Paid" })}
-              />
-            </View>
-          )}
-        </Card>
-      )}
-      {t.status === "Completed" && !t.reviewed && mode === "Renter" && (
-        <Card>
-          <Heading title="How was your island ride?" />
-          <View className="flex-row flex-wrap gap-2 mb-4">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <Chip
-                key={n}
-                title={`${n} ★`}
-                selected={rating === n}
-                onPress={() => setRating(n)}
-              />
-            ))}
-          </View>
-          <Field
-            label="Share your experience"
-            value={review}
-            onChangeText={setReview}
-            multiline
-          />
-          <Button
-            title="Post review"
-            onPress={() => {
-              updateTrip(t.id, { reviewed: true });
-              toast(`Your ${rating}-star review was saved in this demo.`);
+    <Screen
+      title="Your trip details"
+      subtitle={b ? `Booking #${text(b.booking_number)}` : undefined}
+      back
+    >
+      <SignInRequired />
+      <ResourceState {...data} retry={data.refresh} />
+      {b && t && (
+        <>
+          <Image
+            source={t.vehicle.image}
+            style={{
+              height: 220,
+              width: "100%",
+              borderRadius: 24,
+              marginBottom: 20,
             }}
           />
-        </Card>
-      )}
-      {active && mode === "Renter" && (
-        <Card>
-          <Heading
-            title="Plans changed?"
-            sub="Free cancellation up to 48 hours before pickup. Later cancellations follow the owner’s policy."
-          />
-          {cancel ? (
-            <View className="gap-3">
-              <Text className="text-xs text-muted">
-                {freeCancellation
-                  ? "Cancel this booking? It qualifies for free cancellation."
-                  : "Pickup is less than 48 hours away. A partial or no refund may apply under the cancellation policy."}
+          <Card>
+            <Badge text={t.status.toUpperCase()} />
+            <View className="mt-4">
+              <Heading title={t.vehicle.name} />
+            </View>
+            <DetailRow
+              title="Dates"
+              detail={`${dateLabel(t.start)} — ${dateLabel(t.end)}`}
+            />
+            <DetailRow title="Pickup & return" detail={t.pickup} />
+            <DetailRow
+              title="Service"
+              detail={t.driver ? "With verified driver" : "Self-drive"}
+            />
+            <DetailRow
+              title="Vehicle plate"
+              detail={text(b.vehicle_plate_snapshot)}
+            />
+            {t.driver && (
+              <>
+                <DetailRow
+                  title="Driver"
+                  detail={text(b.driver_name_snapshot)}
+                />
+                <DetailRow
+                  title="LTFRB case"
+                  detail={text(b.ltfrb_case_snapshot)}
+                />
+                <DetailRow
+                  title="Driver progress"
+                  detail={text(b.driver_trip_status)}
+                />
+              </>
+            )}
+            <DetailRow title="Rental total" detail={php(b.total_centavos)} />
+            <DetailRow
+              title="Deposit · separate"
+              detail={`${php(b.deposit_centavos)} · ${text(b.deposit_status)}`}
+            />
+            <DetailRow title="Payment" detail={t.payment} />
+            {!!b.cancellation_reason && (
+              <Text className="text-xs text-muted mt-4">
+                {text(b.cancellation_reason)}
               </Text>
-              <Button
-                title="Confirm cancellation"
-                onPress={() => {
-                  updateTrip(t.id, { status: "Cancelled" });
-                  toast("Trip cancelled. No demo payment was charged.");
-                }}
-              />
-              <Button
+            )}
+          </Card>
+          <Card>
+            <Heading title="Your local connection" />
+            {rows(b.contacts).map((c) => (
+              <View key={text(c.user_id)} className="mb-3">
+                <DetailRow title={text(c.full_name)} detail={text(c.phone)} />
+                {!!c.phone && (
+                  <AsyncButton
+                    secondary
+                    title="Call"
+                    onPress={async () =>
+                      Linking.openURL(
+                        `tel:${text(c.phone).replace(/[^+\d]/g, "")}`,
+                      )
+                    }
+                  />
+                )}
+              </View>
+            ))}
+            {!rows(b.contacts).length && (
+              <Text className="text-xs text-muted mb-4">
+                Contact details become available after confirmation.
+              </Text>
+            )}
+            <Button
+              secondary
+              title="Message about this booking"
+              onPress={() =>
+                router.push({ pathname: "/chat/[id]", params: { id } })
+              }
+            />
+            <View className="mt-3">
+              <AsyncButton
                 secondary
-                title="Keep my trip"
-                onPress={() => setCancel(false)}
+                title="Open pickup in maps"
+                onPress={async () =>
+                  Linking.openURL(
+                    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${t.pickup}, Camotes Islands, Cebu`)}`,
+                  )
+                }
               />
             </View>
-          ) : (
-            <Button
-              title="Cancel booking"
-              secondary
-              onPress={() => setCancel(true)}
-            />
+          </Card>
+          {(owner || driver) && active && (
+            <Card>
+              <Heading title="Manage this trip" />
+              <View className="gap-3">
+                {pending &&
+                  ((owner && b.status === "pending_owner") ||
+                    (driver && b.status === "pending_driver")) && (
+                    <>
+                      <AsyncButton
+                        title="Accept request"
+                        onPress={() => action("accept")}
+                      />
+                      <Field
+                        label="Decline reason"
+                        value={reason}
+                        onChangeText={setReason}
+                      />
+                      <AsyncButton
+                        secondary
+                        title="Decline request"
+                        disabled={!reason.trim()}
+                        onPress={() => action("decline", { reason })}
+                      />
+                    </>
+                  )}
+                {driver && b.status === "confirmed" && (
+                  <AsyncButton
+                    title="Mark en route"
+                    onPress={() => action("en_route")}
+                  />
+                )}{" "}
+                {["confirmed", "in_progress"].includes(text(b.status)) && (
+                  <>
+                    {owner && (
+                      <>
+                        <Field
+                          label="Condition notes"
+                          value={notes}
+                          onChangeText={setNotes}
+                          multiline
+                        />
+                        <AsyncButton
+                          secondary
+                          title={`${photos.length} condition photos · upload another`}
+                          onPress={async () => {
+                            const path = await pickUpload("handover-photos");
+                            if (path) setPhotos((p) => [...p, path]);
+                          }}
+                        />
+                        <AsyncButton
+                          secondary
+                          title={`Record ${b.status === "confirmed" ? "pickup" : "return"} handover`}
+                          disabled={!photos.length}
+                          onPress={async () => {
+                            await action("handovers", {
+                              phase:
+                                b.status === "confirmed" ? "pickup" : "return",
+                              notes,
+                              photo_paths: photos,
+                            });
+                            setPhotos([]);
+                            toast("Condition handover recorded.");
+                          }}
+                        />
+                      </>
+                    )}
+                    <AsyncButton
+                      title={
+                        b.status === "confirmed"
+                          ? "Start trip"
+                          : "Complete trip"
+                      }
+                      onPress={() =>
+                        action(b.status === "confirmed" ? "start" : "complete")
+                      }
+                    />
+                  </>
+                )}
+              </View>
+            </Card>
           )}
-        </Card>
+          {(renter || owner) &&
+            active &&
+            !!b.owner_accepted_at &&
+            b.payment_status !== "paid" && (
+              <Card>
+                <Heading
+                  title="Record a manual payment"
+                  sub="Pay your owner outside the app. Submit evidence for confirmation; no funds move here."
+                />
+                <View className="flex-row flex-wrap gap-2 mb-4">
+                  {["cash", "gcash", "maya", "bank_transfer"].map((m) => (
+                    <Chip
+                      key={m}
+                      title={m.replaceAll("_", " ")}
+                      selected={method === m}
+                      onPress={() => setMethod(m)}
+                    />
+                  ))}
+                </View>
+                <Field
+                  label="Payment reference (required for transfers)"
+                  value={reference}
+                  onChangeText={setReference}
+                />
+                <View className="gap-3">
+                  <AsyncButton
+                    secondary
+                    title={
+                      proof
+                        ? "✓ Proof uploaded"
+                        : "Upload payment proof (optional)"
+                    }
+                    onPress={async () => {
+                      const p = await pickUpload("payment-proofs");
+                      if (p) setProof(p);
+                    }}
+                  />
+                  <AsyncButton
+                    title="Submit payment for confirmation"
+                    disabled={method !== "cash" && !reference.trim()}
+                    onPress={async () => {
+                      await mutate("/payments", {
+                        booking_id: id,
+                        method,
+                        reference_number: reference || undefined,
+                        proof_path: proof || undefined,
+                        event_type: pending ? "advance" : "rental",
+                        request_id: paymentKey,
+                      });
+                      setPaymentKey(randomUUID());
+                      data.refresh();
+                      toast(
+                        "Payment submitted. Your owner must confirm receipt.",
+                      );
+                    }}
+                  />
+                </View>
+              </Card>
+            )}
+          {(owner || renter) &&
+            ["confirmed", "in_progress"].includes(text(b.status)) &&
+            Number(b.deposit_centavos) > 0 &&
+            b.deposit_status === "awaiting_collection" && (
+              <Card>
+                <Heading
+                  title="Security deposit"
+                  sub="Record the deposit paid outside the app; the owner confirms receipt."
+                />
+                <AsyncButton
+                  secondary
+                  title="Submit deposit payment"
+                  onPress={async () => {
+                    await mutate("/payments", {
+                      booking_id: id,
+                      event_type: "deposit_collection",
+                      method: "cash",
+                      request_id: paymentKey,
+                    });
+                    setPaymentKey(randomUUID());
+                    data.refresh();
+                  }}
+                />
+              </Card>
+            )}
+          {owner &&
+            [
+              "completed",
+              "cancelled_by_renter",
+              "cancelled_by_owner",
+              "cancelled_by_driver",
+            ].includes(text(b.status)) &&
+            b.deposit_status === "held" && (
+              <Card>
+                <Heading
+                  title="Return the security deposit"
+                  sub="Return the funds outside the app first, then record the actual cash return."
+                />
+                <AsyncButton
+                  secondary
+                  title="Record completed cash deposit return"
+                  onPress={async () => {
+                    await mutate("/settlements", {
+                      booking_id: id,
+                      event_type: "deposit_return",
+                      amount_centavos: Number(b.deposit_centavos),
+                      method: "cash",
+                      reason: "Deposit returned in cash after rental",
+                      request_id: paymentKey,
+                    });
+                    setPaymentKey(randomUUID());
+                    data.refresh();
+                  }}
+                />
+              </Card>
+            )}
+          {rows(b.payments).length > 0 && (
+            <Card>
+              <Heading title="Payment history" />
+              {rows(b.payments).map((p) => (
+                <View key={text(p.id)} className="mb-5">
+                  <DetailRow
+                    title={`${text(p.event_type)} · ${php(p.amount_centavos)}`}
+                    detail={text(p.status)}
+                  />
+                  {!!p.proof_path && (
+                    <AsyncButton
+                      secondary
+                      title="Open private proof"
+                      onPress={async () =>
+                        Linking.openURL(
+                          await signedFile(
+                            "payment-proofs",
+                            text(p.proof_path),
+                          ),
+                        )
+                      }
+                    />
+                  )}{" "}
+                  {owner && p.status === "pending_verification" && (
+                    <View className="gap-2 mt-3">
+                      <AsyncButton
+                        title="Confirm receipt"
+                        onPress={async () => {
+                          await mutate(`/payments/${text(p.id)}/confirm`, {});
+                          data.refresh();
+                        }}
+                      />
+                      <AsyncButton
+                        secondary
+                        title="Reject reference"
+                        onPress={async () => {
+                          await mutate(`/payments/${text(p.id)}/reject`, {
+                            reason: "Payment could not be verified",
+                          });
+                          data.refresh();
+                        }}
+                      />
+                    </View>
+                  )}
+                </View>
+              ))}
+            </Card>
+          )}
+          {renter && b.status === "completed" && !b.reviewed && (
+            <Card>
+              <Heading title="How was your island ride?" />
+              <View className="flex-row flex-wrap gap-2 mb-4">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Chip
+                    key={n}
+                    title={`${n} ★`}
+                    selected={rating === n}
+                    onPress={() => setRating(n)}
+                  />
+                ))}
+              </View>
+              <Field
+                label="Share your experience"
+                value={review}
+                onChangeText={setReview}
+                multiline
+              />
+              <AsyncButton
+                title="Submit review"
+                onPress={async () => {
+                  await mutate("/reviews", {
+                    booking_id: id,
+                    rating,
+                    comment: review,
+                    target_type: "vehicle",
+                  });
+                  data.refresh();
+                  toast("Review published.");
+                }}
+              />
+            </Card>
+          )}
+          {renter &&
+            ["pending_owner", "pending_driver", "confirmed"].includes(
+              text(b.status),
+            ) && (
+              <Card>
+                <Heading
+                  title="Plans changed?"
+                  sub={`Free cancellation until ${text(b.cancellation_free_hours)} hours before pickup. Later refunds depend on the agreed policy.`}
+                />
+                <Field
+                  label="Cancellation reason"
+                  value={reason}
+                  onChangeText={setReason}
+                />
+                <AsyncButton
+                  secondary
+                  title="Cancel this booking"
+                  disabled={!reason.trim()}
+                  onPress={() => action("cancel", { reason })}
+                />
+              </Card>
+            )}
+        </>
       )}
     </Screen>
   );
