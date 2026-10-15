@@ -187,7 +187,7 @@ export default function TripDetails() {
                     title="Mark en route"
                     onPress={() => action("en_route")}
                   />
-                )}{" "}
+                )}
                 {["confirmed", "in_progress"].includes(text(b.status)) && (
                   <>
                     {owner && (
@@ -375,7 +375,7 @@ export default function TripDetails() {
                         )
                       }
                     />
-                  )}{" "}
+                  )}
                   {owner && p.status === "pending_verification" && (
                     <View className="gap-2 mt-3">
                       <AsyncButton

@@ -8,8 +8,9 @@ import React, {
 } from "react";
 import { AppState, Platform } from "react-native";
 import type { Session } from "@supabase/supabase-js";
-import { api, photoUrl } from "@/lib/api";
+import { api, ApiError, photoUrl } from "@/lib/api";
 import { configured, supabase } from "@/lib/supabase";
+import { signOutCurrentDevice } from "@/lib/auth-session";
 import {
   asRow,
   mapTrip,
@@ -29,6 +30,8 @@ type App = {
   session: Session | null;
   signedIn: boolean;
   initializing: boolean;
+  identityLoading: boolean;
+  identityError: string;
   mode: Mode;
   modes: Mode[];
   setMode: (m: Mode) => Promise<void>;
@@ -54,6 +57,8 @@ const Context = createContext<App | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [identityLoading, setIdentityLoading] = useState(false);
+  const [identityError, setIdentityError] = useState("");
   const [me, setMe] = useState<Me | null>(null);
   const [mode, setModeState] = useState<Mode>("Renter");
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -73,6 +78,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setMe(null);
     setTrips([]);
     setOwned([]);
+    setIdentityError("");
+    setIdentityLoading(false);
     setModeState("Renter");
   }, []);
   useEffect(() => {
@@ -127,27 +134,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     const epoch = generation.current;
     const sequence = ++refreshSequence.current;
+    setLoading(true);
+    setIdentityLoading(!!session);
     try {
-      const config = await api<Row>("/settings");
+      // A catalog/provider failure must not hide a successfully loaded identity.
+      const [config, identity, bookings, owned] = await Promise.allSettled([
+        api<Row>("/settings"),
+        session ? api<Me>("/me") : Promise.resolve(null),
+        session ? api<Row[]>("/bookings?limit=50") : Promise.resolve([]),
+        session ? api<Row[]>("/owned-vehicles") : Promise.resolve([]),
+      ]);
       if (epoch !== generation.current || sequence !== refreshSequence.current)
         return;
-      setSettings(asRow(config));
-      if (session) {
-        const [identity, bookings, owned] = await Promise.all([
-          api<Me>("/me"),
-          api<Row[]>("/bookings?limit=50"),
-          api<Row[]>("/owned-vehicles"),
-        ]);
-        if (
-          epoch !== generation.current ||
-          sequence !== refreshSequence.current
-        )
-          return;
-        setMe(identity);
-        setTrips(rows(bookings).map((b) => mapTrip(b, photoUrl)));
-        setOwned(rows(owned));
-        const preferred = text(identity.profile.preferred_mode);
-        const active = identity.roles.some(
+      if (config.status === "fulfilled") setSettings(asRow(config.value));
+      if (identity.status === "fulfilled" && identity.value) {
+        const current = identity.value;
+        setMe(current);
+        setIdentityError("");
+        const preferred = text(current.profile.preferred_mode);
+        const active = current.roles.some(
           (r) => r.role === preferred && r.status === "active",
         );
         setModeState(
@@ -155,14 +160,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ? ((preferred[0].toUpperCase() + preferred.slice(1)) as Mode)
             : "Renter",
         );
+      } else if (identity.status === "rejected") {
+        setIdentityError(
+          identity.reason instanceof Error
+            ? identity.reason.message
+            : "Could not load your account",
+        );
+        if (
+          identity.reason instanceof ApiError &&
+          [401, 403].includes(identity.reason.status)
+        )
+          setMe(null);
       }
-      setError("");
+      if (bookings.status === "fulfilled")
+        setTrips(rows(bookings.value).map((b) => mapTrip(b, photoUrl)));
+      if (owned.status === "fulfilled") setOwned(rows(owned.value));
+      const failure = [identity, config, bookings, owned].find(
+        (result) => result.status === "rejected",
+      );
+      setError(
+        failure?.status === "rejected"
+          ? failure.reason instanceof Error
+            ? failure.reason.message
+            : "Could not load data"
+          : "",
+      );
     } catch (e) {
       if (epoch === generation.current && sequence === refreshSequence.current)
         setError(e instanceof Error ? e.message : "Could not load data");
     } finally {
-      if (epoch === generation.current && sequence === refreshSequence.current)
+      if (
+        epoch === generation.current &&
+        sequence === refreshSequence.current
+      ) {
         setLoading(false);
+        setIdentityLoading(false);
+      }
     }
   }, [session]);
   useEffect(() => {
@@ -220,15 +253,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    const { remoteConfirmed } = await signOutCurrentDevice(supabase.auth);
     generation.current++;
     clearPrivate();
     setSession(null);
+    toast(
+      remoteConfirmed
+        ? "Signed out successfully."
+        : "Signed out on this device. Server sign-out could not be confirmed.",
+    );
   };
   return (
     <Context.Provider
       value={{
+        identityLoading,
+        identityError,
         session,
         signedIn: !!session,
         initializing,

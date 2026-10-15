@@ -6,12 +6,17 @@ import {
   TextInput,
   View,
   Image,
+  Platform,
   useWindowDimensions,
 } from "react-native";
 import { router, usePathname, type Href } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useApp } from "@/state/app";
 import { money, type Vehicle } from "@/data/models";
+import { renterHomeHref } from "@/lib/navigation";
+import type { RentalDates } from "@/lib/rental-dates";
+import { AppIcon, AppLogo, type AppIconName } from "./app-icon";
+import { MotionView } from "./motion";
 export function Icon({
   name,
   size = 21,
@@ -21,32 +26,27 @@ export function Icon({
   size?: number;
   color?: string;
 }) {
-  const symbols: Record<string, string> = {
-    explore: "◈",
-    trips: "▣",
-    messages: "☏",
-    profile: "◎",
-    heart: "♡",
-    arrow: "↗",
-    pin: "⌖",
-    calendar: "▦",
-    search: "⌕",
-    filter: "☷",
-    bell: "♧",
-    check: "✓",
-    car: "▰",
-    star: "★",
-    dashboard: "◫",
-    earnings: "₱",
-    vehicles: "▰",
+  const symbols: Record<string, AppIconName> = {
+    explore: "compass",
+    trips: "calendar",
+    messages: "message-circle",
+    profile: "user",
+    heart: "heart",
+    arrow: "arrow-up-right",
+    pin: "map-pin",
+    calendar: "calendar",
+    search: "search",
+    filter: "sliders",
+    bell: "bell",
+    check: "check",
+    car: "car",
+    star: "star-filled",
+    dashboard: "layout-dashboard",
+    earnings: "wallet",
+    vehicles: "car",
   };
   return (
-    <Text
-      accessible={false}
-      style={{ fontSize: size, color, fontWeight: "500" }}
-    >
-      {symbols[name] || name}
-    </Text>
+    <AppIcon name={symbols[name] || "compass"} size={size} color={color} />
   );
 }
 export function Button({
@@ -117,11 +117,11 @@ export function Heading({
         <Text className="text-2xl font-semibold text-ink tracking-tight">
           {title}
         </Text>
-        {sub && (
+        {!!sub && (
           <Text className="text-muted text-sm mt-2 leading-5">{sub}</Text>
         )}
       </View>
-      {action && (
+      {!!action && (
         <Pressable
           accessibilityRole="button"
           onPress={onAction}
@@ -216,8 +216,19 @@ export function Row({
     </Pressable>
   );
 }
-export function VehicleCard({ vehicle }: { vehicle: Vehicle }) {
+export function VehicleCard({
+  vehicle,
+  rentalDates,
+}: {
+  vehicle: Vehicle;
+  rentalDates?: RentalDates;
+}) {
   const { favorites, toggleFavorite } = useApp();
+  const openVehicle = () =>
+    router.push({
+      pathname: "/vehicle/[id]",
+      params: { id: vehicle.id, ...rentalDates },
+    });
   return (
     <View
       className="bg-white rounded-3xl overflow-hidden border border-[#E2E6DE] flex-1"
@@ -226,7 +237,7 @@ export function VehicleCard({ vehicle }: { vehicle: Vehicle }) {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`View ${vehicle.name}`}
-        onPress={() => router.push(`/vehicle/${vehicle.id}` as Href)}
+        onPress={openVehicle}
       >
         <Image
           source={vehicle.image}
@@ -248,13 +259,14 @@ export function VehicleCard({ vehicle }: { vehicle: Vehicle }) {
         onPress={() => toggleFavorite(vehicle.id)}
         className="absolute right-4 top-4 w-9 h-9 rounded-full bg-white items-center justify-center"
       >
-        <Text className="text-lg text-ocean">
-          {favorites.includes(vehicle.id) ? "♥" : "♡"}
-        </Text>
+        <AppIcon
+          name={favorites.includes(vehicle.id) ? "heart-filled" : "heart"}
+          size={21}
+        />
       </Pressable>
       <Pressable
         accessibilityRole="button"
-        onPress={() => router.push(`/vehicle/${vehicle.id}` as Href)}
+        onPress={openVehicle}
         className="p-5"
       >
         <View className="flex-row justify-between items-center">
@@ -289,19 +301,7 @@ export function VehicleCard({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 export function Brand() {
-  return (
-    <View className="flex-row items-center gap-2">
-      <View className="w-8 h-8 rounded-xl bg-ocean items-center justify-center">
-        <Text className="text-white font-bold text-xl">
-          c<Text className="text-coral">.</Text>
-        </Text>
-      </View>
-      <Text className="text-[19px] text-ocean font-bold tracking-tight">
-        camotes<Text className="font-normal">drive</Text>
-        <Text className="text-coral">.</Text>
-      </Text>
-    </View>
-  );
+  return <AppLogo />;
 }
 export function Avatar() {
   const { name } = useApp();
@@ -335,7 +335,6 @@ export function Screen({
     mode,
     modes,
     setMode,
-    notice,
     toast,
     name,
     signedIn,
@@ -343,10 +342,11 @@ export function Screen({
     error,
     refresh,
   } = useApp();
+  const showNavigation = signedIn && !path.startsWith("/auth");
   const nav =
     mode === "Renter"
       ? [
-          ["explore", "Explore", "/"],
+          ["explore", "Explore", renterHomeHref],
           ["trips", "My trips", "/trips"],
           ["heart", "Saved", "/saved"],
           ["messages", "Messages", "/messages"],
@@ -374,18 +374,31 @@ export function Screen({
         key={label}
         accessibilityRole="tab"
         accessibilityState={{ selected: active }}
-        onPress={() => router.push(href as Href)}
+        onPress={() => {
+          if (active) return;
+          if (
+            mobile &&
+            Platform.OS !== "web" &&
+            nav.some((item) => item[2] === path)
+          ) {
+            router.replace(href as Href);
+          } else {
+            router.navigate(href as Href);
+          }
+        }}
         className={
           mobile
-            ? "items-center justify-center flex-1 py-3 gap-1"
+            ? `items-center justify-center flex-1 min-h-[60px] py-2 gap-1 mx-1 my-1 rounded-xl ${active ? "bg-mint" : "bg-transparent"}`
             : `flex-row items-center gap-4 rounded-xl px-5 py-4 mb-2 ${active ? "bg-[#E8EFE8]" : ""}`
         }
       >
-        <Icon
-          name={icon}
-          color={active ? "#164E43" : "#8A928A"}
-          size={mobile ? 23 : 21}
-        />
+        <View className={mobile ? "w-12 h-8 items-center justify-center" : ""}>
+          <Icon
+            name={icon}
+            color={active ? "#164E43" : "#8A928A"}
+            size={mobile ? 23 : 21}
+          />
+        </View>
         <Text
           className={`${mobile ? "text-[9px]" : "text-[13px]"} ${active ? "font-bold text-ocean" : "text-muted"}`}
         >
@@ -397,7 +410,7 @@ export function Screen({
   return (
     <SafeAreaView className="flex-1 bg-sand" edges={["top", "bottom"]}>
       <View className="flex-1 flex-row">
-        {wide && (
+        {wide && showNavigation && (
           <View className="w-[235px] bg-[#FCFCF8] border-r border-[#E6E9DF] px-6 pt-10 pb-6">
             <Brand />
             <Text className="text-[9px] tracking-[2px] text-muted mt-12 mb-5 px-5">
@@ -430,55 +443,62 @@ export function Screen({
           </View>
         )}
         <View className="flex-1">
-          <View
-            className={`flex-row items-center justify-between border-b border-[#E7EADF] bg-[#FCFCF8] ${wide ? "px-10 py-5" : "px-5 py-4"}`}
-          >
-            {wide ? (
-              <View className="flex-row gap-2 items-center">
-                <Icon name="pin" size={18} />
-                <Text className="text-xs text-ink">Camotes Islands, Cebu</Text>
-                <Text className="text-muted text-xs">⌄</Text>
-              </View>
-            ) : (
-              <Brand />
-            )}
+          {showNavigation && (
             <View
-              className={`flex-row items-center ${wide ? "gap-5" : "gap-2"}`}
+              className={`flex-row items-center justify-between border-b border-[#E7EADF] bg-[#FCFCF8] ${wide ? "px-10 py-5" : "px-5 py-4"}`}
             >
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => {
-                  if (!signedIn) {
-                    router.push("/auth");
-                    return;
-                  }
-                  if (modes.length === 1) {
-                    router.push("/profile");
-                    return;
-                  }
-                  const next = modes[(modes.indexOf(mode) + 1) % 3];
-                  void setMode(next)
-                    .then(() =>
-                      router.push(next === "Renter" ? "/" : "/provider"),
-                    )
-                    .catch((e) => toast(e.message));
-                }}
-                className="bg-mint rounded-full px-3 py-2"
+              {wide ? (
+                <View className="flex-row gap-2 items-center">
+                  <Icon name="pin" size={18} />
+                  <Text className="text-xs text-ink">
+                    Camotes Islands, Cebu
+                  </Text>
+                  <Text className="text-muted text-xs">⌄</Text>
+                </View>
+              ) : (
+                <Brand />
+              )}
+              <View
+                className={`flex-row items-center ${wide ? "gap-5" : "gap-2"}`}
               >
-                <Text className="text-[10px] font-semibold text-ocean">
-                  {mode} mode ⇄
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Notifications"
-                onPress={() => router.push("/notifications")}
-              >
-                <Icon name="bell" />
-              </Pressable>
-              {wide && <Avatar />}
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    if (!signedIn) {
+                      router.push("/auth");
+                      return;
+                    }
+                    if (modes.length === 1) {
+                      router.push("/profile");
+                      return;
+                    }
+                    const next =
+                      modes[(modes.indexOf(mode) + 1) % modes.length];
+                    void setMode(next)
+                      .then(() =>
+                        router.push(
+                          next === "Renter" ? renterHomeHref : "/provider",
+                        ),
+                      )
+                      .catch((e) => toast(e.message));
+                  }}
+                  className="bg-mint rounded-full px-3 py-2"
+                >
+                  <Text className="text-[10px] font-semibold text-ocean">
+                    {mode} mode ⇄
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Notifications"
+                  onPress={() => router.push("/notifications")}
+                >
+                  <Icon name="bell" />
+                </Pressable>
+                {wide && <Avatar />}
+              </View>
             </View>
-          </View>
+          )}
           <ScrollView
             contentContainerStyle={{
               padding: wide ? 36 : 20,
@@ -489,65 +509,62 @@ export function Screen({
             }}
             keyboardShouldPersistTaps="handled"
           >
-            {back && (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() =>
-                  router.canGoBack() ? router.back() : router.replace("/")
-                }
-                className="mb-5"
-              >
-                <Text className="text-ocean text-sm">← Back</Text>
-              </Pressable>
-            )}
-            {title && <Heading title={title} sub={subtitle} />}
-            {loading && (
-              <Text className="text-xs text-muted mb-4">
-                Connecting to your island…
-              </Text>
-            )}
-            {!!error && (
-              <View className="bg-[#FFF1E2] rounded-2xl p-4 mb-4">
-                <Text
-                  accessibilityRole="alert"
-                  className="text-sm text-ink mb-3"
-                >
-                  {error}
-                </Text>
+            <MotionView enabled={Platform.OS === "web"}>
+              {back && (
                 <Pressable
                   accessibilityRole="button"
-                  onPress={() => void refresh()}
+                  onPress={() =>
+                    router.canGoBack()
+                      ? router.back()
+                      : router.replace(renterHomeHref)
+                  }
+                  className="mb-5"
                 >
-                  <Text className="text-sm text-ocean font-semibold">
-                    Retry connection
-                  </Text>
+                  <Text className="text-ocean text-sm">← Back</Text>
                 </Pressable>
+              )}
+              {!!title && <Heading title={title} sub={subtitle} />}
+              {loading && (
+                <Text className="text-xs text-muted mb-4">
+                  Connecting to your island…
+                </Text>
+              )}
+              {!!error && (
+                <View className="bg-[#FFF1E2] rounded-2xl p-4 mb-4">
+                  <Text
+                    accessibilityRole="alert"
+                    className="text-sm text-ink mb-3"
+                  >
+                    {error}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void refresh()}
+                  >
+                    <Text className="text-sm text-ocean font-semibold">
+                      Retry connection
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+              {children}
+              <View className="mt-10 flex-row justify-between border-t border-[#E0E5DA] pt-5">
+                <Text className="text-[10px] text-muted">
+                  Made for the island. Made for you.
+                </Text>
+                <Text className="text-[9px] text-muted">
+                  CAMOTESDRIVE © 2026
+                </Text>
               </View>
-            )}
-            {children}
-            <View className="mt-10 flex-row justify-between border-t border-[#E0E5DA] pt-5">
-              <Text className="text-[10px] text-muted">
-                Made for the island. Made for you.
-              </Text>
-              <Text className="text-[9px] text-muted">CAMOTESDRIVE © 2026</Text>
-            </View>
+            </MotionView>
           </ScrollView>
-          {!wide && (
+          {!wide && showNavigation && (
             <View className="flex-row bg-[#FCFCF8] border-t border-[#E1E6DA]">
               {nav.map((item) => navItem(item, true))}
             </View>
           )}
         </View>
       </View>
-      {!!notice && (
-        <Pressable
-          accessibilityRole="alert"
-          onPress={() => toast("")}
-          className="absolute bottom-24 self-center bg-ocean rounded-2xl px-6 py-4 mx-5 max-w-lg"
-        >
-          <Text className="text-white text-sm">{notice} ×</Text>
-        </Pressable>
-      )}
     </SafeAreaView>
   );
 }

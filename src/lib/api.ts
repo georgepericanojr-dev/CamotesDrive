@@ -45,7 +45,9 @@ export async function api<T>(
     throw new ApiError(
       signal?.aborted
         ? "Request cancelled"
-        : "Cannot reach CamotesDrive. Check your connection and API deployment.",
+        : timeout.signal.aborted
+          ? "CamotesDrive took too long to respond. Please retry."
+          : "Cannot reach the CamotesDrive API. Check your connection and the deployed function's ALLOWED_ORIGINS setting; web access requires this browser's exact origin, including its port.",
       0,
     );
   } finally {

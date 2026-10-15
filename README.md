@@ -23,7 +23,23 @@ In the output, you'll find options to open the app in a
 - [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+### Open the admin web entry
+
+Run `npx expo start` and press **w**, or run `npm run web`. The browser opens the site root, which automatically redirects to `/admin` on the current Expo port.
+
+To use port 8080 specifically:
+
+```bash
+npx expo start --port 8080
+```
+
+Then press **w** to open `http://localhost:8080/admin`. Keep the API's `ALLOWED_ORIGINS` aligned with the port you use; see [AdminAccountSetup.md](AdminAccountSetup.md).
+
+Signed-out visitors see the admin sign-in entry. Choose **Sign in** to log in and return to `/admin`; an active admin role is still required. For renter login on web, open `/auth`; successful login opens `/explore`. Android and iOS retain their login-first startup.
+
+The web redirect lives in `src/app/index.web.tsx`; `src/app/index.tsx` remains the native home screen. Restart Expo after adding or changing platform-specific route files.
+
+You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
 ## Get a fresh project
 

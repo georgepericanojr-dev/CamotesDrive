@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Text, View, Switch } from "react-native";
+import { Text, View, Switch, Platform } from "react-native";
 import { router } from "expo-router";
 import * as Linking from "expo-linking";
 import {
@@ -19,12 +19,23 @@ import {
   ResourceState,
   SignInRequired,
 } from "@/components/camotes/api-ui";
-import { asRow, mapVehicle, text, type Row } from "@/data/models";
+import { asRow, manilaDate, mapVehicle, text, type Row } from "@/data/models";
 import { useApp } from "@/state/app";
 import { supabase } from "@/lib/supabase";
 import { photoUrl } from "@/lib/api";
 import { pickUpload, signedFile } from "@/lib/uploads";
 import { useResource } from "@/hooks/use-resource";
+import { SignOutButton } from "@/components/camotes/sign-out-button";
+import { renterHomeHref } from "@/lib/navigation";
+import { DateField } from "@/components/camotes/date-field";
+import { isDateOnly } from "@/lib/date-only";
+import { VerificationGuide } from "@/components/camotes/verification-guide";
+import {
+  DOCUMENT_GUIDE,
+  documentLabel,
+  VERIFICATION_GOALS,
+  type VerificationGoal,
+} from "@/lib/verification-guide";
 export function Saved() {
   const { signedIn } = useApp();
   const data = useResource<Row[]>(signedIn ? "/saved" : null);
@@ -59,7 +70,6 @@ export function Profile() {
     setMode,
     mutate,
     toast,
-    signOut,
   } = useApp();
   const [edit, setEdit] = useState(false);
   const [draft, setDraft] = useState("");
@@ -103,10 +113,13 @@ export function Profile() {
                   value={phone}
                   onChangeText={setPhone}
                 />
-                <Field
-                  label="Birth date for ID review (YYYY-MM-DD)"
+                <DateField
+                  label="Birth date for ID review"
                   value={dob}
                   onChangeText={setDob}
+                  maximumDate={manilaDate()}
+                  optional
+                  helperText="Your birth date is confirmed during document review."
                 />
                 <AsyncButton
                   title="Save profile & accept terms/privacy"
@@ -139,12 +152,23 @@ export function Profile() {
             )}
             <DetailRow
               title="Verification documents"
+              detail="See checklist"
               onPress={() => router.push("/verification")}
             />
             <DetailRow
               title="Notification preferences"
               onPress={() => router.push("/settings")}
             />
+            {Platform.OS === "web" &&
+              roles.some(
+                (role) => role.role === "admin" && role.status === "active",
+              ) && (
+                <DetailRow
+                  title="Admin dashboard"
+                  detail="Open"
+                  onPress={() => router.push("/admin")}
+                />
+              )}
           </Card>
           <Card>
             <Heading
@@ -159,7 +183,7 @@ export function Profile() {
                   secondary={mode !== m}
                   onPress={async () => {
                     await setMode(m);
-                    router.push(m === "Renter" ? "/" : "/provider");
+                    router.push(m === "Renter" ? renterHomeHref : "/provider");
                   }}
                 />
               ))}
@@ -203,14 +227,7 @@ export function Profile() {
               title="Rental terms & privacy"
               onPress={() => router.push("/legal")}
             />
-            <AsyncButton
-              secondary
-              title="Sign out"
-              onPress={async () => {
-                await signOut();
-                router.replace("/auth");
-              }}
-            />
+            <SignOutButton />
             <DetailRow
               title="Request account deletion"
               onPress={() => setDeleting(true)}
@@ -242,111 +259,6 @@ export function Profile() {
           </Card>
         </>
       )}
-    </Screen>
-  );
-}
-export function Auth() {
-  const { mutate, toast } = useApp();
-  const [kind, setKind] = useState("Sign in");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [consent, setConsent] = useState(false);
-  const redirect =
-    process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL ||
-    Linking.createURL("auth/callback");
-  return (
-    <Screen
-      title="Your island days start here"
-      subtitle="Sign in securely with your email address."
-      back
-    >
-      <Card>
-        <View className="flex-row flex-wrap gap-2 mb-5">
-          {["Sign in", "Register", "Reset password"].map((k) => (
-            <Chip
-              key={k}
-              title={k}
-              selected={kind === k}
-              onPress={() => setKind(k)}
-            />
-          ))}
-        </View>
-        {kind === "Register" && (
-          <Field label="Full name" value={name} onChangeText={setName} />
-        )}
-        <Field label="Email address" value={email} onChangeText={setEmail} />
-        {kind !== "Reset password" && (
-          <Field
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-        )}
-        {kind === "Register" && (
-          <View className="mb-4">
-            <Chip
-              title={
-                consent
-                  ? "✓ Terms & privacy accepted"
-                  : "Accept Terms & Privacy Policy"
-              }
-              selected={consent}
-              onPress={() => setConsent(!consent)}
-            />
-            <DetailRow
-              title="Read terms and privacy policy"
-              onPress={() => router.push("/legal")}
-            />
-          </View>
-        )}
-        <AsyncButton
-          title={kind}
-          disabled={
-            !email.includes("@") ||
-            (kind === "Register" && password.length < 8) ||
-            (kind === "Sign in" && !password) ||
-            (kind === "Register" && (!name.trim() || !consent))
-          }
-          onPress={async () => {
-            if (kind === "Reset password") {
-              const { error } = await supabase.auth.resetPasswordForEmail(
-                email.trim(),
-                { redirectTo: redirect },
-              );
-              if (error) throw error;
-              toast("Check your email for a password reset link.");
-              return;
-            }
-            if (kind === "Register") {
-              const { data, error } = await supabase.auth.signUp({
-                email: email.trim(),
-                password,
-                options: {
-                  emailRedirectTo: redirect,
-                  data: { full_name: name },
-                },
-              });
-              if (error) throw error;
-              if (data.session) {
-                await mutate("/me", { full_name: name, accept_terms: true });
-                router.replace("/profile");
-              } else
-                toast(
-                  "Check your email to verify your account, then sign in and complete your profile.",
-                );
-              return;
-            }
-            const { error } = await supabase.auth.signInWithPassword({
-              email: email.trim(),
-              password,
-            });
-            if (error) throw error;
-            router.replace("/profile");
-          }}
-        />
-      </Card>
     </Screen>
   );
 }
@@ -434,8 +346,15 @@ export function AuthCallback() {
   );
 }
 export function Verification() {
-  const { signedIn, roles, ownedVehicles, mutate, toast } = useApp();
+  const { signedIn, roles, mode, ownedVehicles, mutate, toast } = useApp();
   const data = useResource<Row[]>(signedIn ? "/documents" : null);
+  const [goal, setGoal] = useState<VerificationGoal>(
+    mode === "Driver"
+      ? "driver"
+      : mode === "Owner"
+        ? "owner"
+        : "renter_self_drive",
+  );
   const [kind, setKind] = useState("government_id");
   const [vehicle, setVehicle] = useState("");
   const [issued, setIssued] = useState("");
@@ -450,91 +369,135 @@ export function Verification() {
     "ltfrb_authority",
     "passenger_insurance",
   ].includes(kind);
-  const available = [
+  const noExpiryAllowed = [
     "government_id",
-    "drivers_license",
-    ...(roles.some((r) => r.role === "driver")
-      ? ["professional_license", "nbi_clearance", "pnp_clearance"]
-      : []),
-    ...(roles.some((r) => r.role === "owner")
-      ? [
-          "or_cr",
-          "ctpl_insurance",
-          "ltfrb_authority",
-          "passenger_insurance",
-          "business_permit",
-          "dti_sec_registration",
-        ]
-      : []),
+    "or_cr",
+    "dti_sec_registration",
+  ].includes(kind);
+  const selectKind = (next: string) => {
+    if (next === kind) return;
+    setKind(next);
+    setPath("");
+    setIssued("");
+    setExpiry("");
+    setReference("");
+    setPlate("");
+  };
+  const available = [
+    ...new Set([
+      "government_id",
+      "drivers_license",
+      ...VERIFICATION_GOALS[goal].documents,
+      ...(roles.some((r) => r.role === "driver")
+        ? ["professional_license", "nbi_clearance", "pnp_clearance"]
+        : []),
+      ...(goal === "owner" || roles.some((r) => r.role === "owner")
+        ? [
+            "or_cr",
+            "ctpl_insurance",
+            "ltfrb_authority",
+            "passenger_insurance",
+            "business_permit",
+            "dti_sec_registration",
+          ]
+        : []),
+    ]),
   ];
   return (
     <Screen
-      title="Trust starts here"
-      subtitle="Documents are private and reviewed by an administrator."
+      title="Verify your account"
+      subtitle="See what you need, upload each document, then submit it for administrator review. Your files stay private."
       back
     >
       <SignInRequired />
       {signedIn && (
         <>
           <ResourceState {...data} retry={data.refresh} />
-          {data.data?.map((d) => (
-            <Card key={text(d.id)}>
-              <Badge text={text(d.status).toUpperCase()} />
-              <DetailRow
-                title={text(d.document_type)}
-                detail={text(d.expires_on) || "No expiry provided"}
-              />
-              {!!d.rejection_reason && (
-                <Text className="text-xs text-muted mb-3">
-                  {text(d.rejection_reason)}
-                </Text>
-              )}
-              <AsyncButton
-                secondary
-                title="Open private document"
-                onPress={async () =>
-                  Linking.openURL(
-                    await signedFile(
-                      "verification-documents",
-                      text(d.storage_path),
-                    ),
-                  )
-                }
-              />
-            </Card>
-          ))}
+          <VerificationGuide
+            goal={goal}
+            onGoal={(next) => {
+              setGoal(next);
+              selectKind(VERIFICATION_GOALS[next].documents[0]);
+            }}
+            documents={data.data || []}
+            loading={data.loading}
+            error={data.error}
+            vehicles={ownedVehicles}
+            vehicle={vehicle}
+            onVehicle={(id) => {
+              setVehicle(id);
+              setPath("");
+              setReference("");
+              setPlate("");
+              setIssued("");
+              setExpiry("");
+            }}
+          />
           <Card>
             <Heading
               title="Submit a document"
-              sub="Use a clear image or PDF. License restrictions and date of birth are verified by review."
+              sub="1. Select a document type. 2. Add its details. 3. Choose a file and submit for review."
             />
+            <Text className="text-sm font-semibold text-ink mb-2">
+              1. What are you uploading?
+            </Text>
             <View className="flex-row flex-wrap gap-2 mb-4">
               {available.map((k) => (
                 <Chip
                   key={k}
-                  title={k.replaceAll("_", " ")}
+                  title={documentLabel(k)}
                   selected={kind === k}
-                  onPress={() => {
-                    setKind(k);
-                    setPath("");
-                  }}
+                  onPress={() => selectKind(k)}
                 />
               ))}
             </View>
+            <View className="bg-mint rounded-2xl p-4 mb-4">
+              <Text className="text-sm font-semibold text-ocean mb-2">
+                {documentLabel(kind)}
+              </Text>
+              <Text className="text-sm text-ink leading-6">
+                {DOCUMENT_GUIDE[kind]?.help}
+              </Text>
+              <Text className="text-xs text-muted mt-3 leading-5">
+                Accepted: JPG, PNG, WebP or PDF, up to 10 MB per file. Keep all
+                edges visible and avoid blur, glare or covered details. If both
+                sides or several pages are needed, combine them in one PDF or
+                image.
+              </Text>
+            </View>
+            <Text className="text-sm font-semibold text-ink mb-3">
+              2. Document details
+            </Text>
             {vehicleDocument && (
               <View className="gap-2 mb-4">
+                <Text className="text-xs font-semibold text-ink">
+                  Which vehicle is this for? (required)
+                </Text>
+                {ownedVehicles.length === 0 && (
+                  <Text className="text-sm text-muted">
+                    Save a vehicle draft in Provider → Vehicles first. You can
+                    then select it here.
+                  </Text>
+                )}
                 {ownedVehicles.map((v) => (
                   <Chip
                     key={text(v.id)}
                     title={text(v.name)}
                     selected={vehicle === v.id}
-                    onPress={() => setVehicle(text(v.id))}
+                    onPress={() => {
+                      setVehicle(text(v.id));
+                      setPath("");
+                      setReference("");
+                      setPlate("");
+                      setIssued("");
+                      setExpiry("");
+                    }}
                   />
                 ))}
               </View>
             )}
             <Field
-              label="Reference / case number"
+              label="Document / reference number (if shown)"
               value={reference}
               onChangeText={setReference}
             />
@@ -545,16 +508,34 @@ export function Verification() {
                 onChangeText={setPlate}
               />
             )}
-            <Field
-              label="Issue date (YYYY-MM-DD)"
+            <DateField
+              label="Issue date (if shown)"
               value={issued}
               onChangeText={setIssued}
+              maximumDate={isDateOnly(expiry) ? expiry : undefined}
+              optional
             />
-            <Field
-              label="Expiry date (YYYY-MM-DD, if applicable)"
+            <DateField
+              label={
+                noExpiryAllowed
+                  ? "Expiry date (if shown)"
+                  : "Expiry date (required)"
+              }
               value={expiry}
               onChangeText={setExpiry}
+              minimumDate={issued > manilaDate() ? issued : manilaDate()}
+              optional={noExpiryAllowed}
+              helperText={
+                noExpiryAllowed
+                  ? "Enter the printed expiry date. Leave empty only if this document has no expiry."
+                  : "Enter the expiry date printed on your document. It must be valid today and for your trip dates."
+              }
             />
+            {!!issued && !!expiry && issued > expiry && (
+              <Text className="text-red-700 text-xs mb-4">
+                The expiry date must be on or after the issue date.
+              </Text>
+            )}
             <Chip
               title={
                 consent
@@ -564,15 +545,23 @@ export function Verification() {
               selected={consent}
               onPress={() => setConsent(!consent)}
             />
+            <Text className="text-sm font-semibold text-ink mt-5 mb-2">
+              3. Upload and submit
+            </Text>
+            <Text className="text-xs text-muted leading-5">
+              Give consent above to choose a file. After uploading, tap “Submit
+              for review” to send it to an administrator. Repeat for each item
+              in your checklist.
+            </Text>
             <View className="gap-3 mt-4">
               <AsyncButton
                 secondary
                 title={
                   path
-                    ? "✓ File uploaded · choose another"
+                    ? "✓ File ready · choose another"
                     : "Choose & upload private file"
                 }
-                disabled={!consent}
+                disabled={!consent || (vehicleDocument && !vehicle)}
                 onPress={async () => {
                   const p = await pickUpload("verification-documents");
                   if (p) setPath(p);
@@ -580,7 +569,14 @@ export function Verification() {
               />
               <AsyncButton
                 title="Submit for review"
-                disabled={!path || !consent || (vehicleDocument && !vehicle)}
+                disabled={
+                  !path ||
+                  !consent ||
+                  (vehicleDocument && !vehicle) ||
+                  (!noExpiryAllowed && !isDateOnly(expiry)) ||
+                  (!!expiry && expiry < manilaDate()) ||
+                  (!!issued && !!expiry && issued > expiry)
+                }
                 onPress={async () => {
                   await mutate("/documents", {
                     document_type: kind,
@@ -600,11 +596,68 @@ export function Verification() {
                   });
                   setPath("");
                   data.refresh();
-                  toast("Document submitted for review.");
+                  toast(
+                    "Document submitted. Check your checklist for review status and upload the remaining documents.",
+                  );
                 }}
               />
             </View>
           </Card>
+          <Heading
+            title="Your submitted documents"
+            sub="In review means your document is waiting for an administrator. If rejected, read the reason and upload a corrected copy."
+          />
+          {!data.loading && !data.error && data.data?.length === 0 && (
+            <Card>
+              <Text className="text-sm text-muted">
+                No documents submitted yet. Start with your checklist above.
+              </Text>
+            </Card>
+          )}
+          {data.data?.map((d) => (
+            <Card key={text(d.id)}>
+              <Badge
+                text={
+                  text(d.status) === "pending"
+                    ? "IN REVIEW"
+                    : text(d.status).toUpperCase()
+                }
+              />
+              <DetailRow
+                title={documentLabel(text(d.document_type))}
+                detail={
+                  text(d.expires_on)
+                    ? `Expires ${text(d.expires_on)}`
+                    : "No expiry provided"
+                }
+              />
+              {!!d.vehicle_id && (
+                <Text className="text-xs text-muted mb-3">
+                  Vehicle:{" "}
+                  {text(
+                    ownedVehicles.find((v) => v.id === d.vehicle_id)?.name,
+                  ) || "Vehicle record unavailable"}
+                </Text>
+              )}
+              {!!d.rejection_reason && (
+                <Text className="text-sm text-ink mb-3">
+                  Reason: {text(d.rejection_reason)}
+                </Text>
+              )}
+              <AsyncButton
+                secondary
+                title="Open private document"
+                onPress={async () =>
+                  Linking.openURL(
+                    await signedFile(
+                      "verification-documents",
+                      text(d.storage_path),
+                    ),
+                  )
+                }
+              />
+            </Card>
+          ))}
         </>
       )}
     </Screen>

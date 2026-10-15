@@ -19,7 +19,15 @@ import {
   Screen,
   VehicleCard,
 } from "@/components/camotes/ui";
-import { beach, mapVehicle, type Row as DataRow } from "@/data/models";
+import {
+  beach,
+  mapVehicle,
+  manilaDate,
+  type Row as DataRow,
+} from "@/data/models";
+import { DateField } from "@/components/camotes/date-field";
+import { addDateDays } from "@/lib/date-only";
+import { rentalDatesFromParams, rentalEndForStart } from "@/lib/rental-dates";
 import { ResourceState } from "@/components/camotes/api-ui";
 import { photoUrl } from "@/lib/api";
 import { useResource } from "@/hooks/use-resource";
@@ -31,6 +39,9 @@ export default function Explore() {
   const [category, setCategory] = useState("All vehicles");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const rentalDates = rentalDatesFromParams(startDate, endDate, manilaDate(1));
   const [area, setArea] = useState("Anywhere");
   const [budget, setBudget] = useState("Any price");
   const [transmission, setTransmission] = useState("Any");
@@ -148,15 +159,32 @@ export default function Explore() {
             <Text className="text-[9px] font-bold tracking-widest text-muted mb-2">
               YOUR DATES
             </Text>
-            <Pressable
-              onPress={() => setFilters(true)}
-              className="flex-row items-center gap-2 py-2"
-            >
-              <Icon name="calendar" size={18} />
-              <Text className="text-sm text-ink">
-                Choose dates when reserving
-              </Text>
-            </Pressable>
+            <DateField
+              label="Pickup date"
+              value={startDate}
+              minimumDate={manilaDate(1)}
+              optional
+              onChangeText={(value) => {
+                setStartDate(value);
+                setEndDate(value ? rentalEndForStart(value, endDate) : "");
+              }}
+            />
+            <DateField
+              label="Return date"
+              value={endDate}
+              minimumDate={
+                startDate ? addDateDays(startDate, 1) : manilaDate(2)
+              }
+              optional
+              onChangeText={(value) => {
+                setEndDate(value);
+                if (value && !startDate) setStartDate(manilaDate(1));
+              }}
+            />
+            <Text className="text-xs leading-5 text-muted">
+              Dates carry into your reservation. Availability is confirmed when
+              booking.
+            </Text>
           </View>
           <View className="flex-1">
             <Text className="text-[9px] font-bold tracking-widest text-muted mb-2">
@@ -272,7 +300,10 @@ export default function Explore() {
                 key={v.id}
                 style={{ width: width >= 740 ? "47.5%" : "100%" }}
               >
-                <VehicleCard vehicle={v} />
+                <VehicleCard
+                  vehicle={v}
+                  rentalDates={rentalDates ?? undefined}
+                />
               </View>
             ))}
           </View>

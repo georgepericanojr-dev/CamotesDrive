@@ -20,6 +20,7 @@ import { manilaDate, number, php, rows, text, type Row } from "@/data/models";
 import { useApp } from "@/state/app";
 import { useResource } from "@/hooks/use-resource";
 import { pickUpload } from "@/lib/uploads";
+import { DateField } from "@/components/camotes/date-field";
 export function Provider() {
   const { mode, name, signedIn, session, trips, driverProfile, mutate } =
     useApp();
@@ -358,10 +359,11 @@ function ListingForm({ initial }: { initial?: Row }) {
             value={caseNumber}
             onChangeText={setCaseNumber}
           />
-          <Field
-            label="Authority valid until (YYYY-MM-DD)"
+          <DateField
+            label="Authority valid until"
             value={authorityExpiry}
             onChangeText={setAuthorityExpiry}
+            optional
           />
           <Text className="text-xs text-muted mb-4">
             Upload LTFRB authority and passenger insurance in Verification.
@@ -449,23 +451,29 @@ function ListingForm({ initial }: { initial?: Row }) {
 }
 export function Availability() {
   const { vehicleId } = useLocalSearchParams<{ vehicleId?: string }>();
-  const { signedIn, mode, driverProfile, mutate, toast } = useApp();
+  const { signedIn, session, mode, driverProfile, mutate, toast } = useApp();
   const source = useResource<Row[]>(
     signedIn
       ? `/availability${vehicleId ? `?vehicle_id=${vehicleId}` : ""}`
       : null,
   );
-  const [selected, setSelected] = useState<string[] | null>(null);
+  const [month, setMonth] = useState(() => manilaDate().slice(0, 7));
+  // Keep unsaved changes when browsing another month or another vehicle.
+  const [drafts, setDrafts] = useState<
+    Record<string, { days: string[]; dirty: boolean }>
+  >({});
   const [fee, setFee] = useState("");
   const [areas, setAreas] = useState("");
   const [languages, setLanguages] = useState("");
   const [reason, setReason] = useState("Unavailable");
-  const month = manilaDate().slice(0, 7);
-  const count = new Date(
-    Number(month.slice(0, 4)),
-    Number(month.slice(5)),
-    0,
-  ).getDate();
+  const year = Number(month.slice(0, 4));
+  const monthIndex = Number(month.slice(5)) - 1;
+  const count = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  const firstWeekday = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
+  const monthLabel = new Date(Date.UTC(year, monthIndex, 1)).toLocaleDateString(
+    "en-PH",
+    { month: "long", year: "numeric", timeZone: "UTC" },
+  );
   const loaded = rows(source.data)
     .map((b) =>
       new Date(text(b.starts_at)).toLocaleDateString("en-CA", {
@@ -473,32 +481,108 @@ export function Availability() {
       }),
     )
     .filter((day) => day.slice(0, 7) === month);
-  const blocked = selected || loaded;
+  const draftKey = `${session?.user.id}:${vehicleId || "driver"}:${month}`;
+  const draft = drafts[draftKey];
+  const blocked = draft?.days || loaded;
+  const ready = !source.loading && !source.error && source.data !== null;
+  const unsavedMonths = Object.keys(drafts).filter(
+    (key) =>
+      key.startsWith(`${session?.user.id}:${vehicleId || "driver"}:`) &&
+      drafts[key].dirty,
+  ).length;
+  const moveMonth = (offset: number) => {
+    setMonth(
+      new Date(Date.UTC(year, monthIndex + offset, 1))
+        .toISOString()
+        .slice(0, 7),
+    );
+  };
   return (
     <Screen
       title="Make room for island days"
-      subtitle={`${month} · Select dates to mark unavailable.`}
+      subtitle="Choose a month, then select the dates you are unavailable."
       back
     >
       <SignInRequired />
       <ResourceState {...source} retry={source.refresh} />
       {signedIn && (
         <Card>
+          <DateField
+            label="Choose availability month"
+            value={`${month}-01`}
+            onChangeText={(day) => setMonth(day.slice(0, 7))}
+            helperText="Choose any day to open its month in the calendar below."
+          />
+          <View className="flex-row items-center gap-3 mb-5">
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Previous availability month"
+              className="bg-mint rounded-xl px-4 py-3"
+              onPress={() => moveMonth(-1)}
+            >
+              <Text className="text-ocean">‹</Text>
+            </Pressable>
+            <Text className="text-ink font-semibold flex-1 text-center">
+              {monthLabel}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next availability month"
+              className="bg-mint rounded-xl px-4 py-3"
+              onPress={() => moveMonth(1)}
+            >
+              <Text className="text-ocean">›</Text>
+            </Pressable>
+          </View>
+          {unsavedMonths > 0 && (
+            <Text className="text-muted text-xs mb-4">
+              {unsavedMonths}{" "}
+              {unsavedMonths === 1 ? "month has" : "months have"} unsaved
+              changes. Save each month when ready; browsing keeps your
+              selections.
+            </Text>
+          )}
+          <View className="flex-row mb-2">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+              <Text
+                key={day}
+                className="text-xs text-muted text-center"
+                style={{ width: "14.2857%" }}
+              >
+                {day}
+              </Text>
+            ))}
+          </View>
           <View className="flex-row flex-wrap mb-5">
+            {Array.from({ length: firstWeekday }, (_, i) => (
+              <View
+                key={`empty-${i}`}
+                style={{ width: "14.2857%", padding: 3 }}
+              />
+            ))}
             {Array.from(
               { length: count },
               (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`,
             ).map((d) => (
-              <View key={d} style={{ width: "14.28%", padding: 3 }}>
+              <View key={d} style={{ width: "14.2857%", padding: 3 }}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`${d}${blocked.includes(d) ? ", unavailable" : ""}`}
+                  accessibilityState={{
+                    selected: blocked.includes(d),
+                    disabled: !ready,
+                  }}
+                  disabled={!ready}
                   onPress={() =>
-                    setSelected(
-                      blocked.includes(d)
-                        ? blocked.filter((x) => x !== d)
-                        : [...blocked, d],
-                    )
+                    setDrafts((current) => ({
+                      ...current,
+                      [draftKey]: {
+                        days: blocked.includes(d)
+                          ? blocked.filter((x) => x !== d)
+                          : [...blocked, d].sort(),
+                        dirty: true,
+                      },
+                    }))
                   }
                   className={`rounded-xl py-4 items-center ${blocked.includes(d) ? "bg-ocean" : "bg-mint"}`}
                 >
@@ -514,7 +598,7 @@ export function Availability() {
           <Field label="Block reason" value={reason} onChangeText={setReason} />
           <AsyncButton
             title="Save unavailable dates"
-            disabled={mode === "Owner" && !vehicleId}
+            disabled={!ready || (mode === "Owner" && !vehicleId)}
             onPress={async () => {
               await mutate("/availability", {
                 vehicle_id: vehicleId,
@@ -522,8 +606,17 @@ export function Availability() {
                 days: blocked,
                 reason,
               });
+              setDrafts((current) => ({
+                ...current,
+                [draftKey]: {
+                  days: current[draftKey]?.days || blocked,
+                  // Changes made while saving still need another save.
+                  dirty:
+                    !!current[draftKey] && current[draftKey].days !== blocked,
+                },
+              }));
               source.refresh();
-              toast("Availability saved.");
+              toast(`Availability saved for ${monthLabel}.`);
             }}
           />
           {mode === "Driver" && (

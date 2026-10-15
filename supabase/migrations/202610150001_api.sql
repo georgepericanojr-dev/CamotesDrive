@@ -130,7 +130,7 @@ begin
     'payouts',coalesce((select jsonb_agg(to_jsonb(p) order by created_at desc) from public.payouts p where provider_id=actor),'[]'));
  end if;
  if resource='admin' then
-   if not camotes_private.is_admin() then raise insufficient_privilege using message='Admin role and MFA required'; end if;
+   if not camotes_private.is_admin() then raise insufficient_privilege using message='Active admin role required'; end if;
    -- Deliberately exclude conversations/messages: those require assigned disputes.
    case coalesce(params->>'section','overview')
     when 'overview' then return jsonb_build_object('users',(select count(*) from public.profiles),'vehicles',(select count(*) from public.vehicles where status='approved'),'bookings',(select count(*) from public.bookings),'pending_documents',(select count(*) from public.documents where status='pending'));
@@ -180,7 +180,7 @@ begin
  insert into camotes_private.api_rate_limits values(actor,date_trunc('minute',now()),1)
  on conflict(user_id,minute) do update set requests=camotes_private.api_rate_limits.requests+1 returning requests into n;
  if n>120 then raise exception using message='Too many changes; try again in a minute',errcode='P0429'; end if;
- if action like 'admin.%' and not camotes_private.is_admin() then raise insufficient_privilege using message='Admin role and MFA required'; end if;
+ if action like 'admin.%' and not camotes_private.is_admin() then raise insufficient_privilege using message='Active admin role required'; end if;
  if action='profile.update' then
    update public.profiles set full_name=coalesce(payload->>'full_name',full_name),phone=coalesce(payload->>'phone',phone),
     submitted_date_of_birth=coalesce((payload->>'submitted_date_of_birth')::date,submitted_date_of_birth),
@@ -392,7 +392,7 @@ begin
  if action in ('payment.confirm','payment.reject','admin.payment.confirm') then
    select * into p from public.payments where id=(payload->>'id')::uuid;
    select * into b from public.bookings where id=p.booking_id for update;
-   if p.id is null or not ((actor=b.owner_id and camotes_private.has_role('owner')) or camotes_private.is_admin()) then raise insufficient_privilege using message='Owner or MFA admin required'; end if;
+   if p.id is null or not ((actor=b.owner_id and camotes_private.has_role('owner')) or camotes_private.is_admin()) then raise insufficient_privilege using message='Active owner or admin role required'; end if;
    select * into p from public.payments where id=p.id for update;
    if p.status<>'pending_verification' then return to_jsonb(p); end if;
    if action='payment.reject' then update public.payments set status='rejected',notes=payload->>'reason' where id=p.id;
@@ -409,7 +409,7 @@ begin
  end if;
  if action='payment.settle' then
    target=(payload->>'booking_id')::uuid; select * into b from public.bookings where id=target for update;
-   if b.id is null or not ((actor=b.owner_id and camotes_private.has_role('owner')) or camotes_private.is_admin()) then raise insufficient_privilege using message='Owner or MFA admin required'; end if;
+   if b.id is null or not ((actor=b.owner_id and camotes_private.has_role('owner')) or camotes_private.is_admin()) then raise insufficient_privilege using message='Active owner or admin role required'; end if;
    kind=payload->>'event_type'; amount=(payload->>'amount_centavos')::bigint;
    if kind not in ('refund','deposit_return','deposit_withholding') or kind is null or amount is null or amount<=0 then raise exception 'Valid settlement amount/event required'; end if;
    if nullif(btrim(payload->>'reason'),'') is null then raise exception 'Settlement reason required'; end if;

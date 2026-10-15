@@ -12,9 +12,16 @@ import { AsyncButton, ResourceState } from "@/components/camotes/api-ui";
 import { useResource } from "@/hooks/use-resource";
 import { useApp } from "@/state/app";
 import { photoUrl } from "@/lib/api";
-import { mapVehicle, money, text, type Row } from "@/data/models";
+import { mapVehicle, money, text, manilaDate, type Row } from "@/data/models";
+import { rentalDatesFromParams } from "@/lib/rental-dates";
+import { renterHomeHref } from "@/lib/navigation";
 export default function VehicleDetails() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, startDate, endDate } = useLocalSearchParams<{
+    id: string;
+    startDate?: string;
+    endDate?: string;
+  }>();
+  const rentalDates = rentalDatesFromParams(startDate, endDate, manilaDate(1));
   const { favorites, toggleFavorite } = useApp();
   const data = useResource<Row[]>(id ? `/vehicles/${id}` : null);
   const v = data.data?.[0] ? mapVehicle(data.data[0], photoUrl) : null;
@@ -84,7 +91,7 @@ export default function VehicleDetails() {
               onPress={() =>
                 router.push({
                   pathname: "/booking",
-                  params: { vehicleId: v.id },
+                  params: { vehicleId: v.id, ...rentalDates },
                 })
               }
             />
@@ -107,7 +114,7 @@ export default function VehicleDetails() {
             </Text>
             <Button
               title="Explore other rides"
-              onPress={() => router.replace("/")}
+              onPress={() => router.replace(renterHomeHref)}
             />
           </Card>
         )

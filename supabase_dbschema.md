@@ -462,7 +462,7 @@ language sql stable security definer set search_path = '' as $$
 $$;
 create function camotes_private.is_admin() returns boolean
 language sql stable security definer set search_path = '' as $$
- select camotes_private.has_role('admin') and coalesce(auth.jwt()->>'aal','') = 'aal2';
+ select auth.role() = 'authenticated' and camotes_private.has_role('admin');
 $$;
 create function camotes_private.owns_vehicle(p_id uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -798,8 +798,8 @@ do $$ declare t text; begin
 end $$;
 
 -- RLS + explicit privileges. Sensitive mutations are intentionally service-only.
--- Edge Functions MUST authenticate the user, authorize the actor and enforce MFA
--- for admins before using service_role. Never ship service_role in the app.
+-- Edge Functions MUST authenticate the user and authorize the actor's active role
+-- before using service_role. Never ship service_role in the app.
 do $$ declare t text; begin
  foreach t in array array['profiles','user_roles','platform_settings','locations','driver_profiles','vehicles','vehicle_photos','vehicle_pickup_points','vehicle_availability','driver_availability','documents','bookings','booking_authorized_drivers','booking_events','handovers','payments','conversations','user_blocks','messages','notifications','device_tokens','reviews','favorites','payouts','reports_disputes','audit_logs'] loop
    execute format('alter table public.%I enable row level security',t);
@@ -1011,7 +1011,7 @@ commit;
 -- 1. Sign up your real admin account using Supabase Auth, then replace the UUID:
 -- insert into public.user_roles(user_id,role,status,verified_at)
 -- values ('REPLACE_WITH_AUTH_USER_UUID'::uuid,'admin','active',now());
--- 2. Enroll/challenge MFA; admin RLS reads require JWT aal2.
+-- 2. Sign in with that account; admin RLS requires an active account/admin role.
 -- 3. Build authorized Edge Functions for listing submission/revisions, approvals,
 --    availability writes, booking creation/transitions, payments, payouts,
 --    document review, review replies/moderation, signed URLs and account deletion.

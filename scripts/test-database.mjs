@@ -38,9 +38,72 @@ try {
   console.log('Application tables:', rls.n);
   const uid = n => `00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
   const [renter, owner, driver, stranger, admin] = [1,2,3,4,5].map(uid);
-  for (const id of [renter,owner,driver,stranger,admin]) await db.exec(`insert into auth.users(id,email_confirmed_at,raw_user_meta_data) values('${id}',now(),'${JSON.stringify({ full_name:'Test User',role:'admin' })}'); update public.profiles set date_of_birth=current_date-interval '30 years',phone='+639170000000',terms_accepted_at=now(),privacy_accepted_at=now() where id='${id}';`);
+  const profileNames = new Map([[renter,'Alex Renter'],[owner,'Bea Owner'],[driver,'Chris Driver'],[stranger,'Dina Stranger'],[admin,'Eli Admin']]);
+  for (const [id, full_name] of profileNames) await db.exec(`insert into auth.users(id,email_confirmed_at,raw_user_meta_data) values('${id}',now(),'${JSON.stringify({ full_name,role:'admin' })}'); update public.profiles set date_of_birth=current_date-interval '30 years',phone='+639170000000',terms_accepted_at=now(),privacy_accepted_at=now() where id='${id}';`);
   check('signup metadata cannot self-assign admin', (await one(`select count(*)::int n from public.user_roles where role='admin'`)).n === 0);
   await db.exec(`insert into public.user_roles(user_id,role,status) values('${admin}','admin','active');`);
+  await asUser(admin);
+  check('fresh schema allows active authenticated admin without MFA',(await one('select camotes_private.is_admin() allowed')).allowed);
+  await root();
+  // Emulate an existing deployment before the MFA-removal migration. This also
+  // proves the migration upgrades deployed RPC definitions, not only new installs.
+  await db.exec(`create or replace function camotes_private.is_admin() returns boolean
+    language sql stable security definer set search_path = '' as $$
+    select camotes_private.has_role('admin') and coalesce(auth.jwt()->>'aal','') = 'aal2'; $$;`);
+  for (const signature of ['public.camotes_read(text,jsonb)','public.camotes_mutate(text,jsonb)']) {
+    const definition=(await one(`select pg_get_functiondef('${signature}'::regprocedure) definition`)).definition;
+    await db.exec(definition.replaceAll('Active admin role required','Admin role and MFA required').replaceAll('Active owner or admin role required','Owner or MFA admin required'));
+  }
+  await asUser(admin);
+  check('legacy admin helper blocks aal1 before upgrade',!(await one('select camotes_private.is_admin() allowed')).allowed);
+  await deny('legacy RPC blocks admin aal1 before upgrade',`select public.camotes_read('admin','{"section":"users"}')`,'42501');
+  await root();
+  const removeAdminMfaSql=readFileSync('supabase/migrations/202610150002_remove_admin_mfa.sql','utf8');
+  await db.exec(removeAdminMfaSql);check('MFA removal migration upgrades existing installation');
+  const adminRoleNamesSql=readFileSync('supabase/migrations/202610150003_admin_role_names.sql','utf8').replaceAll('\r\n','\n');
+  const adminRoleNamesCrlfSql=adminRoleNamesSql.replaceAll('\n','\r\n');
+  await db.exec(adminRoleNamesCrlfSql);check('admin role names migration upgrades existing installation');
+  const installedRoleReadDefinition=(await one(`select pg_get_functiondef('public.camotes_read(text,jsonb)'::regprocedure) definition`)).definition;
+  await db.exec(adminRoleNamesSql);await db.exec(adminRoleNamesCrlfSql);await db.exec(adminRoleNamesSql);
+  assert.equal((await one(`select pg_get_functiondef('public.camotes_read(text,jsonb)'::regprocedure) definition`)).definition,installedRoleReadDefinition);
+  check('role names migration supports LF and CRLF reapplication without rewriting the installed function');
+  for (const signature of ['public.camotes_read(text,jsonb)','public.camotes_mutate(text,jsonb)']) {
+    const definition=(await one(`select pg_get_functiondef('${signature}'::regprocedure) definition`)).definition;
+    check(`${signature} legacy MFA error messages are updated`,!definition.includes('Admin role and MFA required')&&!definition.includes('Owner or MFA admin required'));
+  }
+  await asUser(admin);
+  check('upgraded admin helper allows aal1',(await one('select camotes_private.is_admin() allowed')).allowed);
+  check('upgraded admin RPC allows aal1',Array.isArray((await one(`select public.camotes_read('admin','{"section":"users"}') value`)).value));
+  check('upgraded admin can perform an admin mutation at aal1',(await one(`select public.camotes_mutate('admin.settings.update','{}')->>'currency' currency`)).currency==='PHP');
+  check('upgraded admin RLS exposes other profiles',(await one('select count(*)::int n from public.profiles')).n>1);
+  const namedRoleRows=(await one(`select public.camotes_read('admin','{"section":"roles","limit":50}') value`)).value;
+  const storedRoleRows=(await db.query('select * from public.user_roles')).rows;
+  check('admin role records preserve every user UUID and role',namedRoleRows.length===storedRoleRows.length&&storedRoleRows.every(stored=>namedRoleRows.some(row=>row.user_id===stored.user_id&&row.role===stored.role&&row.status===stored.status)));
+  check('admin role records join the correct full name for every profile',namedRoleRows.every(row=>row.full_name===(profileNames.get(row.user_id)??null)&&row.account_status==='active'));
+  check('blank profile names remain absent instead of exposing a fabricated name',namedRoleRows.find(row=>row.user_id===uid(99)).full_name===null);
+  const rolePage=(await one(`select public.camotes_read('admin','{"section":"roles","limit":2,"offset":1}') value`)).value;
+  assert.deepEqual(rolePage,namedRoleRows.slice(1,3));check('enriched role records preserve stable server pagination');
+  check('role pagination past the last record is empty',(await one(`select public.camotes_read('admin','{"section":"roles","offset":100}') value`)).value.length===0);
+  await asUser(stranger,'aal2');
+  await deny('MFA alone never grants admin read access',`select public.camotes_read('admin','{"section":"users"}')`,'42501');
+  await deny('ordinary users cannot read full names through admin role records',`select public.camotes_read('admin','{"section":"roles"}')`,'42501');
+  await deny('MFA alone never grants admin mutation access',`select public.camotes_mutate('admin.settings.update','{}')`,'42501');
+  for (const status of ['pending','rejected','suspended']) {
+    await root();await db.exec(`update public.user_roles set status='${status}' where user_id='${admin}' and role='admin'`);
+    await asUser(admin,'aal2');
+    check(`${status} admin role fails helper`,!(await one('select camotes_private.is_admin() allowed')).allowed);
+    await deny(`${status} admin role cannot read admin RPC`, `select public.camotes_read('admin','{"section":"users"}')`,'42501');
+  }
+  await root();await db.exec(`update public.user_roles set status='active' where user_id='${admin}' and role='admin'; update public.profiles set account_status='suspended' where id='${admin}';`);
+  await asUser(admin,'aal2');
+  check('suspended admin account fails helper',!(await one('select camotes_private.is_admin() allowed')).allowed);
+  await deny('suspended admin account cannot read admin RPC',`select public.camotes_read('admin','{"section":"users"}')`,'42501');
+  await deny('suspended admin account cannot mutate admin RPC',`select public.camotes_mutate('admin.settings.update','{}')`,'42501');
+  await root();await db.exec(`update public.profiles set account_status='active' where id='${admin}'`);
+  await asUser(admin,'aal2','anon');
+  await deny('anonymous claim cannot use a real admin identity',`select public.camotes_read('admin','{"section":"users"}')`,'42501');
+  await deny('anonymous sessions cannot read enriched admin role records',`select public.camotes_read('admin','{"section":"roles"}')`,'42501');
+  await root();
   async function doc(user, type, vehicle = null, plate='TEST 123') { const vehicleVal=vehicle ? `'${vehicle}'` : 'null'; await db.exec(`insert into public.documents(user_id,vehicle_id,document_type,storage_path,reference_number,plate_number,issued_on,expires_on,license_kind,reviewed_vehicle_classes,next_reverification_on,consent_given_at,status,reviewed_by,reviewed_at) values('${user}',${vehicleVal},'${type}','${user}/${type}/${vehicle || 'personal'}','CASE-001','${plate}',current_date-1,current_date+365,'professional',array['car','suv','van','motorcycle'],current_date+365,now(),'approved','${admin}',now());`); }
   for(const [user, types] of [[owner,['government_id']],[renter,['government_id','drivers_license']],[driver,['government_id','professional_license','nbi_clearance','pnp_clearance']]]) for(const type of types) await doc(user,type);
   await db.exec(`insert into public.driver_profiles(user_id,verification_status,available_for_hire,daily_fee_centavos,service_areas) values('${driver}','approved',true,120000,array['San Francisco']); insert into public.user_roles(user_id,role,status,verified_by,verified_at) values('${owner}','owner','active','${admin}',now()),('${driver}','driver','active','${admin}',now());`);
@@ -84,13 +147,13 @@ try {
   await asUser(stranger);
   await deny('outsider cannot send booking message',`insert into public.messages(conversation_id,sender_id,body,client_message_id) values('${conversation}','${stranger}','Hello',gen_random_uuid())`);
   await asUser(admin);
-  check('admin without MFA cannot view private documents',(await one(`select count(*)::int n from public.documents`)).n === 0);
+  check('active admin without MFA can view private documents',(await one(`select count(*)::int n from public.documents`)).n > 0);
   await asUser(admin,'aal2');
-  check('admin with MFA can view documents',(await one(`select count(*)::int n from public.documents`)).n > 0);
+  check('existing aal2 admin sessions still work',(await one(`select count(*)::int n from public.documents`)).n > 0);
   check('admin cannot browse unrelated booking chat',(await one(`select count(*)::int n from public.messages`)).n === 0);
   await root();
   await db.exec(`insert into public.reports_disputes(reporter_id,booking_id,category,description,assigned_admin_id) values('${renter}','${b1}','other','Review this chat','${admin}');`);
-  await asUser(admin,'aal2');
+  await asUser(admin);
   check('assigned dispute admin may read reported booking chat',(await one(`select count(*)::int n from public.messages`)).n === 1);
   await root();
   await deny('nonprofessional license cannot be approved as professional', `insert into public.documents(user_id,document_type,storage_path,issued_on,expires_on,license_kind,reviewed_vehicle_classes,next_reverification_on,consent_given_at,status,reviewed_by,reviewed_at) values('${stranger}','professional_license','${stranger}/fake',current_date-1,current_date+365,'non_professional',array['car'],current_date+365,now(),'approved','${admin}',now())`, '23514');
@@ -163,11 +226,53 @@ try {
   await asUser(owner);const future=new Date(Date.now()+60*86400000);const futureMonth=future.toISOString().slice(0,7);const futureDay=futureMonth+'-20';
   await mutateAction('availability.save',{vehicle_id:secondVehicle,month:futureMonth+'-01',days:[futureDay],reason:'Maintenance'});check('RPC calendar writes correct owned vehicle',(await readAction('availability',{vehicle_id:secondVehicle})).length===1);
   await asUser(stranger);await deny('RPC rejects another owner calendar',"select public.camotes_mutate('availability.save','"+JSON.stringify({vehicle_id:secondVehicle,month:futureMonth+'-01',days:[]})+"')",'42501');
-  await asUser(admin);await deny('RPC admin reads require MFA',"select public.camotes_read('admin','{\"section\":\"users\"}')",'42501');
-  await asUser(admin,'aal2');check('RPC admin read works after MFA',Array.isArray(await readAction('admin',{section:'users'})));
+  await asUser(admin);check('RPC admin read works without MFA',Array.isArray(await readAction('admin',{section:'users'})));
+  const requestedOwnerRole=(await readAction('admin',{section:'roles',limit:50})).find(row=>row.user_id===renter&&row.role==='owner');
+  check('admin role records reflect current full names after profile edits',requestedOwnerRole.full_name==='Updated renter');
+  const reviewedRole=await mutateAction('admin.role.review',{user_id:requestedOwnerRole.user_id,role:requestedOwnerRole.role,decision:'rejected',reason:'Additional evidence required'});
+  const storedReviewedRole=await one(`select status,verified_by from public.user_roles where user_id='${renter}' and role='owner'`);
+  check('admin role review still targets the immutable UUID from a named record',reviewedRole.user_id===renter&&storedReviewedRole.status==='rejected'&&storedReviewedRole.verified_by===admin&&(await one(`select status from public.user_roles where user_id='${owner}' and role='owner'`)).status==='active');
   const refund=await mutateAction('payment.settle',{booking_id:requested.id,event_type:'refund',amount_centavos:100000,method:'bank_transfer',reference_number:'REFUND-1',reason:'Agreed adjustment',request_id:uid(43)});check('RPC manual refund is recorded',refund.status==='confirmed'&&(await readAction('booking',{id:requested.id})).payment_status==='partially_refunded');
   await deny('RPC prevents over-refund',"select public.camotes_mutate('payment.settle','"+JSON.stringify({booking_id:requested.id,event_type:'refund',amount_centavos:99999999,method:'cash',reason:'Test',request_id:uid(44)})+"')");
   await root();await db.exec(readFileSync('supabase/migrations/202610150001_api.sql','utf8'));check('API migration can be reapplied without data loss');
+  await db.exec(removeAdminMfaSql);await db.exec(removeAdminMfaSql);
+  await db.exec(adminRoleNamesCrlfSql);await db.exec(adminRoleNamesSql);await db.exec(adminRoleNamesCrlfSql);await db.exec(adminRoleNamesSql);
+  check('MFA removal migration can be reapplied without deleting bookings',(await one(`select count(*)::int n from public.bookings where id='${requested.id}'`)).n===1);
+  await asUser(admin);check('reapplied migration keeps admin access at aal1',Array.isArray(await readAction('admin',{section:'users'})));
+  check('reapplied role names migration preserves joined names and existing role decisions',(await readAction('admin',{section:'roles',limit:50})).some(row=>row.user_id===renter&&row.role==='owner'&&row.full_name==='Updated renter'&&row.status==='rejected'));
+
+
+  await root();
+  const reviewMigration=readFileSync('supabase/migrations/202610150004_document_review_fields.sql','utf8');
+  await db.exec(reviewMigration);await db.exec(reviewMigration.replaceAll('\r\n','\n'));
+  check('document review migration installs and reapplies safely');
+  const reviewTypes=['government_id','business_permit','or_cr','ctpl_insurance','professional_license','pnp_clearance'];
+  for(let i=0;i<reviewTypes.length;i++) {
+    const type=reviewTypes[i],id=uid(2000+i),vehicleId=['or_cr','ctpl_insurance'].includes(type)?vehicle:null,path=owner+'/review-'+type;
+    await db.query('insert into storage.objects(bucket_id,name,owner_id) values($1,$2,$3)',['verification-documents',path,owner]);
+    await db.query('insert into public.documents(id,user_id,vehicle_id,document_type,storage_path,issued_on,expires_on,consent_given_at) values($1,$2,$3,$4,$5,current_date-1,current_date+365,now())',[id,owner,vehicleId,type,path]);
+  }
+  await asUser(stranger);
+  await deny('ordinary account cannot approve review details',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2001)}","decision":"approved","review_details":{"business_name":"Injected"}}')`,'42501');
+  await deny('ordinary account cannot write review metadata directly',`update public.documents set review_details='{}' where id='${uid(2001)}'`,'42501');
+  await asUser(admin);
+  await deny('government ID rejects vehicle plate fields',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2000)}","decision":"approved","plate_number":"WRONG"}')`);
+  await deny('government ID rejects license class fields',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2000)}","decision":"approved","vehicle_classes":["car"]}')`);
+  await deny('government ID rejects insurance metadata',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2000)}","decision":"approved","review_details":{"insurer":"Wrong"}}')`);
+  await mutateAction('admin.document.review',{id:uid(2000),decision:'approved',reference_number:'ID-001',expires_on:null});
+  const reviewedId=await one(`select status,expires_on,reviewed_by from public.documents where id='${uid(2000)}'`);
+  check('ID review clears optional expiry and records explicit approval',reviewedId.status==='approved'&&reviewedId.expires_on===null&&reviewedId.reviewed_by===admin);
+  await mutateAction('admin.document.review',{id:uid(2001),decision:'approved',reference_number:'PERMIT-1',review_details:{business_name:'Island Business',issuing_authority:'San Francisco LGU'}});
+  check('business details survive API review',(await one(`select review_details from public.documents where id='${uid(2001)}'`)).review_details.business_name==='Island Business');
+  check('review details changes have an admin audit trail',(await one(`select count(*)::int n from public.audit_logs where record_id='${uid(2001)}' and actor_id='${admin}' and 'review_details'=any(changed_fields)`)).n>0);
+  await mutateAction('admin.document.review',{id:uid(2002),decision:'approved',plate_number:'TEST 123',review_details:{or_number:'OR-1',cr_number:'CR-1'}});
+  check('OR and CR numbers persist separately',(await one(`select review_details from public.documents where id='${uid(2002)}'`)).review_details.cr_number==='CR-1');
+  await deny('insurance cannot clear a policy-required expiry',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2003)}","decision":"approved","expires_on":null}')`);
+  await deny('insurance rejects identity birth dates',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2003)}","decision":"approved","verified_date_of_birth":"1990-01-01"}')`);
+  await deny('professional driving license retains explicit classification gate',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2004)}","decision":"approved","vehicle_classes":["car"]}')`);
+  await deny('professional driving license rejects unsupported classes',`select public.camotes_mutate('admin.document.review','{"id":"${uid(2004)}","decision":"approved","license_kind":"professional","vehicle_classes":["airplane"]}')`);
+  await mutateAction('admin.document.review',{id:uid(2005),decision:'rejected',reason:'Unreadable reference'});
+  check('rejection records reason and never approves the evidence',(await one(`select status,rejection_reason from public.documents where id='${uid(2005)}'`)).status==='rejected');
 
   console.log(`\n${passed} checks passed. Local Postgres with Supabase auth/storage stubs; no live project accessed.`);
 } catch(e) { console.error(e.message, e.detail || '', e.where || '', JSON.stringify({position:e.position,internalPosition:e.internalPosition,internalQuery:e.internalQuery,routine:e.routine})); process.exitCode=1; }

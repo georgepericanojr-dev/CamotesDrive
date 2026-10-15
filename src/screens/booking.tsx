@@ -27,15 +27,23 @@ import {
 } from "@/data/models";
 import { useApp } from "@/state/app";
 import { useResource } from "@/hooks/use-resource";
+import { DateField } from "@/components/camotes/date-field";
+import { addDateDays } from "@/lib/date-only";
+import { rentalDatesFromParams, rentalEndForStart } from "@/lib/rental-dates";
 export default function Booking() {
-  const { vehicleId } = useLocalSearchParams<{ vehicleId: string }>();
+  const { vehicleId, startDate, endDate } = useLocalSearchParams<{
+    vehicleId: string;
+    startDate?: string;
+    endDate?: string;
+  }>();
   const { signedIn, chauffeur, mutate, toast } = useApp();
   const vehicle = useResource<Row[]>(
     vehicleId ? `/vehicles/${vehicleId}` : null,
   );
   const locations = useResource<Row[]>("/locations");
-  const [start, setStart] = useState(manilaDate(1));
-  const [end, setEnd] = useState(manilaDate(3));
+  const initialDates = rentalDatesFromParams(startDate, endDate, manilaDate(1));
+  const [start, setStart] = useState(initialDates?.startDate || manilaDate(1));
+  const [end, setEnd] = useState(initialDates?.endDate || manilaDate(3));
   const [location, setLocation] = useState("");
   const [address, setAddress] = useState("");
   const [town, setTown] = useState("San Francisco");
@@ -50,6 +58,17 @@ export default function Booking() {
     signedIn && chauffeur ? `/drivers?through=${end}` : null,
   );
   const v = vehicle.data?.[0] ? mapVehicle(vehicle.data[0], photoUrl) : null;
+  const minimumDays = Math.max(1, Number(v?.raw.min_rental_days) || 1);
+  const maximumDays = Math.max(
+    minimumDays,
+    Number(v?.raw.max_rental_days) || 365,
+  );
+  const firstReturnDate = addDateDays(start, minimumDays);
+  const lastReturnDate = addDateDays(start, maximumDays);
+  const validDates =
+    !!rentalDatesFromParams(start, end, manilaDate(1)) &&
+    end >= firstReturnDate &&
+    end <= lastReturnDate;
   const input = {
     vehicle_id: vehicleId,
     starts_at: `${start}T09:00:00+08:00`,
@@ -97,16 +116,39 @@ export default function Booking() {
             {step === 0 ? (
               <>
                 <Heading title="The little details" />
-                <Field
-                  label="Pickup date (YYYY-MM-DD) · 9 AM"
+                <DateField
+                  label="Pickup date · 9 AM"
                   value={start}
-                  onChangeText={setStart}
+                  minimumDate={manilaDate(1)}
+                  onChangeText={(value) => {
+                    setStart(value);
+                    setEnd((previous) =>
+                      rentalEndForStart(
+                        value,
+                        previous,
+                        minimumDays,
+                        maximumDays,
+                      ),
+                    );
+                  }}
+                  helperText="Pickup and return times use Philippine time."
                 />
-                <Field
-                  label="Return date (YYYY-MM-DD) · 9 AM"
+                <DateField
+                  label="Return date · 9 AM"
                   value={end}
                   onChangeText={setEnd}
+                  minimumDate={firstReturnDate}
+                  maximumDate={lastReturnDate}
                 />
+                {!validDates && (
+                  <Text
+                    accessibilityRole="alert"
+                    className="text-sm text-ink mb-4"
+                  >
+                    Choose a future pickup and a return date {minimumDays}–
+                    {maximumDays} days later.
+                  </Text>
+                )}
                 <ResourceState {...locations} retry={locations.refresh} />
                 <View className="flex-row flex-wrap gap-2 mb-4">
                   {locations.data?.map((l) => (
@@ -173,7 +215,7 @@ export default function Booking() {
                 <View className="mt-5">
                   <AsyncButton
                     title="Continue to payment"
-                    disabled={!start || !end || (!location && !address.trim())}
+                    disabled={!validDates || (!location && !address.trim())}
                     onPress={async () => setStep(1)}
                   />
                 </View>

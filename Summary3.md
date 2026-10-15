@@ -1,5 +1,7 @@
 # CamotesDrive — API and database integration
 
+> Later admin update: MFA is no longer required. Migration `202610150002_remove_admin_mfa.sql` was applied to the connected project on October 15, 2026, and active-admin access without MFA was verified in the live database. The deployment status below describes the original API implementation.
+
 ## What changed
 
 Replaced the demo data provider and hardcoded application records with real Supabase Auth, database, and Storage connections. The React Native/NativeWind screens now call a Supabase Edge Function REST API. No service-role key is included in the app or required by the function.
@@ -9,7 +11,7 @@ The implementation is local code. **No migration, function deployment, account c
 ## Enable it in Supabase
 
 1. If you have not installed the initial schema, run the SQL from `supabase_dbschema.md` in your project's SQL Editor first. Do not rerun that initial installation on an existing database.
-2. Run the entire file `supabase/migrations/202610150001_api.sql` in the SQL Editor. This is an incremental migration; it preserves existing application data and can be reapplied. It adds the API RPC functions and supporting columns/indexes.
+2. Run the entire file `supabase/migrations/202610150001_api.sql` in the SQL Editor, followed by `supabase/migrations/202610150002_remove_admin_mfa.sql`. These incremental migrations preserve existing application data and can be reapplied. The first adds the API RPC functions and supporting columns/indexes; the second removes the admin MFA requirement while retaining signed-in, active-account and active-admin-role checks.
 3. From this project directory, deploy the function using the Supabase CLI:
 
    ```powershell
@@ -33,11 +35,12 @@ The implementation is local code. **No migration, function deployment, account c
 6. For web deployments, optionally restrict browser origins:
 
    ```powershell
-   npx supabase secrets set ALLOWED_ORIGINS=https://YOUR_WEB_ORIGIN --project-ref YOUR_PROJECT_REF
+   # Local development example. Use your browser's actual port.
+   npx supabase secrets set ALLOWED_ORIGINS=http://localhost:8083 --project-ref YOUR_PROJECT_REF
    ```
 
-   Multiple origins can be comma-separated. Include development web origins when needed. Native requests do not require a browser Origin header. CORS does not replace authentication.
-7. Create real accounts through registration. Bootstrap an administrator using the trusted SQL instructions in the initial schema, then enroll and verify TOTP in the web admin panel. Admin APIs require both an active database admin role and an `aal2` session. Demo admin credentials no longer work.
+   Replace `YOUR_PROJECT_REF` with your project's reference. The origin is the scheme, hostname, and port only, without `/profile`, `/admin`, or a trailing slash. For production, use your real deployed web origin. Multiple origins can be comma-separated when both local development and hosted web access are needed. The setting replaces the previous list, so include every origin you still use. Never save `https://YOUR_WEB_ORIGIN` literally: that placeholder blocks the real browser and causes a connection error. Native requests do not require a browser Origin header. CORS does not replace authentication.
+7. Create real accounts through registration. Bootstrap an administrator using [AdminAccountSetup.md](./AdminAccountSetup.md), then sign in at `/admin` with email and password. Admin APIs require an authenticated active account with an active database admin role; MFA is no longer required. Demo admin credentials no longer work.
 8. Add real listings and complete document/role reviews. An empty catalog is expected until an owner has an approved listing. No fake vehicles, balances, bookings, or messages are seeded.
 
 The Edge Function reads Supabase's injected `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEYS.default`, with a legacy `SUPABASE_ANON_KEY` fallback. You do not need a service-role secret for this design.
@@ -67,7 +70,7 @@ Requests use the public project key in the `apikey` header. Private routes addit
 | GET | `/me`, `/owned-vehicles`, `/saved` | Account, verified roles, owned/saved listings |
 | GET | `/bookings`, `/bookings/:id`, `/bookings/:id/messages` | Authorized trips, detail, and conversation |
 | GET | `/notifications`, `/documents`, `/availability`, `/drivers`, `/earnings` | User/provider resources |
-| GET | `/admin/:section` | Whitelisted admin resources; admin role and MFA required |
+| GET | `/admin/:section` | Whitelisted admin resources; authenticated active admin required |
 | POST | `/me`, `/me/mode`, `/me/deletion-request`, `/roles`, `/driver-profile` | Profile, mode, requests, driver settings |
 | POST | `/favorites`, `/vehicles`, `/documents`, `/availability` | Favorites, listing drafts, uploaded document records, calendar |
 | POST | `/vehicles/:id/photo`, `/vehicles/:id/submit`, `/vehicles/:id/deactivate`, `/vehicles/:id/delete` | Listing lifecycle; deletion is a soft delete |
@@ -82,7 +85,7 @@ The executable route map is `supabase/functions/camotes-api/routes.ts`. The fron
 
 ## Security and database behavior
 
-- The function validates the session and forwards the caller's JWT to `camotes_read` / `camotes_mutate`. Their pinned-search-path SQL functions explicitly check identity, active account, roles, booking participation, and MFA where required. Existing RLS and storage policies remain in force for direct access.
+- The function validates the session and forwards the caller's JWT to `camotes_read` / `camotes_mutate`. Their pinned-search-path SQL functions explicitly check identity, active account, roles, and booking participation. Existing RLS and storage policies remain in force for direct access. The subsequent admin update removes MFA as an authorization condition.
 - Renter/owner/sender/reviewer identities come from the authenticated account. URL identifiers override conflicting body/query identifiers. Client fields cannot grant roles, approve documents, overwrite a verified birth date, or confirm the client's own payment.
 - Prices and payment amounts come from the database. Booking/payment/message/payout request keys protect retries. Booking transitions, availability exclusions, document gates, and funds caps are checked transactionally.
 - Approved listings reopen as drafts before edits. Pickup locations are validated and their town is derived from the location record. Conflicting committed vehicle/driver reservations are rejected.
@@ -112,7 +115,7 @@ Installed Expo-compatible SecureStore, DocumentPicker, Crypto, and FileSystem mo
 - `npm.cmd run test:db`: **75 passing checks**, installing the entire initial schema and incremental API migration in local PostgreSQL/PGlite with Supabase Auth/Storage stubs. Includes permissions, MFA, privacy, quote/request/accept/payment/handover/completion, retries, trip filters, reviews, calendar conflicts, refunds, and safe migration reapplication.
 - `npx.cmd expo export --platform all --output-dir .expo/api-build`: successful Android, iOS, and web bundles, including 25 statically rendered web routes. The installed Auth SDK emits a nonblocking deprecation warning for its compatibility lock option.
 
-The database checks do not replace a hosted Supabase integration test. Live Auth redirects, Storage uploads, actual TOTP, and physical-device persistence still need validation after deployment.
+The database checks do not replace a hosted Supabase integration test. Live Auth redirects, Storage uploads, and physical-device persistence still need validation after deployment.
 
 ## Remaining infrastructure
 

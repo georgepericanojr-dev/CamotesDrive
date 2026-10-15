@@ -1,5 +1,7 @@
 # Supabase schema preparation
 
+> Later update: admin MFA is no longer required. See `AdminAccountSetup.md` and `supabase/migrations/202610150002_remove_admin_mfa.sql`. MFA references below describe the earlier schema preparation.
+
 Created `supabase_dbschema.md` from the CamotesDrive PRD. Despite its `.md` extension, it contains **only executable SQL and SQL comments**. Copy the entire file into **Supabase Dashboard → SQL Editor → New query**, then run it as the SQL Editor's `postgres` role.
 
 The script is a **one-time initial installation** for a fresh project/schema. It runs inside a transaction, stops if the main application tables already exist, and does not drop tables or delete existing data. Do not rerun it as an upgrade migration.

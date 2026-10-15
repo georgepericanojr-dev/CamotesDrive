@@ -26,7 +26,7 @@ CamotesDrive provides one app where renters browse vehicles, book, optionally hi
 
 **One app, role-based experience.** All three mobile roles use the same app. Every account is a renter by default. Owners and Drivers share one account and can switch between **Owner Mode** and **Driver Mode** inside the app. Mode switching is a UI convenience only; every permission check is based on the roles a user holds, never on the selected mode.
 
-**Admins do not use the mobile app.** Admin accounts are blocked from the admin panel unless they hold the admin role, and the admin panel requires multi-factor authentication.
+**Admins do not use the mobile app.** Admin accounts are blocked from the admin panel unless they are signed in with an active account and active admin role. Admin access uses email/password sign-in without an MFA requirement.
 
 ## 3. Assumptions and Open Questions
 
@@ -208,7 +208,7 @@ The security deposit has its own status: `not_required`, `held`, `returned`, `pa
 - Admins can hide reviews that violate content rules.
 
 ### 4.10 Admin Web Panel (Web Only)
-- Secure sign-in with multi-factor authentication; separate from the mobile experience and not linked from the app.
+- Email/password sign-in with an active admin role; separate from the mobile experience, with a dashboard link for admins on the web profile.
 - View and manage users; suspend or reactivate accounts.
 - Verify owners, drivers, renter licenses, and vehicles; approve, reject (with reason), or suspend listings. Document viewer uses short-lived signed URLs.
 - Compliance checklist per driver and "with driver" vehicle (required documents, plate match, expiry dates), with approval blocked until all items pass.
@@ -244,7 +244,7 @@ The security deposit has its own status: `not_required`, `held`, `returned`, `pa
 - **Email:** Transactional email provider (e.g., Resend) for backup notifications and account emails.
 
 **Admin web**
-- Next.js (App Router), TypeScript, Tailwind CSS, deployed on Vercel, using Supabase Auth with MFA enforced for admin accounts.
+- Next.js (App Router), TypeScript, Tailwind CSS, deployed on Vercel, using Supabase Auth with active admin-role authorization; MFA is not required.
 
 **Operations**
 - Separate development, staging, and production Supabase projects.
@@ -395,7 +395,7 @@ The security deposit has its own status: `not_required`, `held`, `returned`, `pa
 7. Booking, payment, and deposit statuses and their history are recorded correctly.
 8. Users receive relevant push notifications and can chat within a booking.
 9. Completed rentals can be reviewed once.
-10. Admins can verify users and vehicles, confirm payments, resolve disputes, and view an audit trail on the web panel; MFA is enforced.
+10. Signed-in users with an active account and admin role can verify users and vehicles, confirm payments, resolve disputes, and view an audit trail on the web panel; MFA is not required.
 11. All tables are protected by RLS with automated tests passing for every role and ownership rule.
 12. The app passes Google Play and Apple App Store review.
 13. No driver can be activated without an approved professional license, and no vehicle can be booked with a driver without an approved, unexpired LTFRB authority (verified by automated tests).

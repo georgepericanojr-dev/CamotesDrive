@@ -1,1 +1,1 @@
-export { Auth as default } from "@/screens/account";
+export { default } from "@/screens/auth";

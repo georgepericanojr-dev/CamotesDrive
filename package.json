@@ -53,7 +53,13 @@
     "lint": "expo lint",
     "test:api": "node --experimental-strip-types --test scripts/api-routes.test.mjs",
     "test:db": "node scripts/test-database.mjs",
-    "check:edge": "tsc --project supabase/functions/tsconfig.json"
+    "check:edge": "tsc --project supabase/functions/tsconfig.json",
+    "test:auth": "node --experimental-strip-types --test scripts/auth-feedback.test.mjs scripts/auth-session.test.mjs",
+    "test:auth:browser": "node scripts/test-auth-browser.cjs",
+    "test:uploads": "node --test scripts/uploads.test.cjs",
+    "test:roles": "node --experimental-strip-types --test scripts/admin-role.test.mjs",
+    "test:verification": "node --experimental-strip-types --test scripts/verification-guide.test.mjs",
+    "test:dates": "node --experimental-strip-types --test scripts/date-only.test.mjs scripts/rental-dates.test.cjs"
   },
   "private": true
 }

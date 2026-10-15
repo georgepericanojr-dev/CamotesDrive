@@ -21,7 +21,10 @@ export async function pickUpload(
     type: imagesOnly
       ? ["image/jpeg", "image/png", "image/webp"]
       : ["image/jpeg", "image/png", "image/webp", "application/pdf"],
-    copyToCacheDirectory: true,
+    // Expo Go can scope FileSystem access differently from DocumentPicker's
+    // Android cache. Read the selected content:// URI while its picker grant
+    // is active; iOS still needs its cache copy for immediate file access.
+    copyToCacheDirectory: Platform.OS !== "android",
     multiple: false,
   });
   if (result.canceled) return null;
@@ -30,11 +33,21 @@ export async function pickUpload(
     bucket === "verification-documents" ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
   if (asset.size && asset.size > limit)
     throw new Error(`Choose a file smaller than ${limit / 1024 / 1024} MB`);
-  const bytes =
-    Platform.OS === "web" && asset.file
-      ? await asset.file.arrayBuffer()
-      : await new File(asset.uri).arrayBuffer();
-  if (bytes.byteLength > limit) throw new Error("File is too large");
+  let bytes: ArrayBuffer;
+  try {
+    bytes =
+      Platform.OS === "web" && asset.file
+        ? await asset.file.arrayBuffer()
+        : await new File(asset.uri).arrayBuffer();
+  } catch {
+    throw new Error(
+      "Cannot read the selected file. Choose it again from Files or Downloads. If it is stored online, download it to your device first, then retry.",
+    );
+  }
+  if (bytes.byteLength > limit)
+    throw new Error(`Choose a file smaller than ${limit / 1024 / 1024} MB`);
+  if (!bytes.byteLength)
+    throw new Error("The selected file is empty. Choose another file.");
   const extension = (asset.name.split(".").pop() || "jpg")
     .replace(/[^a-z0-9]/gi, "")
     .toLowerCase();
